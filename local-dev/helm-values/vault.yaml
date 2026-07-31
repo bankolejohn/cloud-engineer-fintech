@@ -1,0 +1,45 @@
+# ==============================================================================
+# Vault — Local Development Values (Dev Mode)
+#
+# WHAT: HashiCorp Vault for secrets management
+# WHY:  Learn dynamic secrets, policies, and K8s auth without cloud dependencies
+#
+# DEV MODE vs PRODUCTION:
+#   Dev Mode (this):                      Production (vault/helm-values.yaml):
+#   - Single node, in-memory             - 3 nodes, Raft persistent storage
+#   - Auto-unsealed, root token = "root" - GCP KMS auto-unseal
+#   - Data lost on pod restart           - Data persisted on disk
+#   - No TLS                             - Full TLS with certificates
+#   - Good for learning                  - Good for real secrets
+#
+# HOW: helm install vault hashicorp/vault -f local-dev/helm-values/vault.yaml -n vault
+# ==============================================================================
+
+server:
+  dev:
+    enabled: true         # Dev mode: auto-unsealed, root token = "root"
+    devRootToken: "root"  # The token to authenticate (NEVER use in production)
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+# Vault Agent Injector (injects secrets into pods as files)
+injector:
+  enabled: true
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      cpu: 100m
+      memory: 128Mi
+
+# Disable UI for resource savings (access via CLI or API)
+ui:
+  enabled: true
+  serviceType: ClusterIP

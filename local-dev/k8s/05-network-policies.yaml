@@ -1,0 +1,177 @@
+# ==============================================================================
+# Network Policies — FinFlow Local Development
+#
+# WHAT: Kubernetes Network Policies restrict pod-to-pod traffic at the network level
+# WHY:  Defense in depth. Even if Istio mTLS is bypassed, network policies STILL block
+#       unauthorized traffic. Belt AND suspenders.
+#
+# HOW IT WORKS:
+#   - Without policies: Any pod can talk to any other pod (open network)
+#   - With default-deny: ALL traffic blocked unless explicitly allowed
+#   - Then we add allow rules for each legitimate communication path
+#
+# IMPORTANT: Network Policies require a CNI that supports them.
+#   - Kind uses kindnet (supports policies)
+#   - GKE uses Calico/Dataplane V2 (supports policies)
+#   - EKS needs Calico addon or VPC CNI with policies enabled
+#
+# WHO CREATES THESE: Platform/Cloud Engineer (you)
+# WHO REQUESTS CHANGES: Backend developers ("my new service needs to call X")
+# ==============================================================================
+
+# ─── DEFAULT DENY INGRESS ──────────────────────────────────────────────────────
+# Block incoming traffic from OUTSIDE the namespace by default.
+# We only deny ingress (not egress) because Istio's sidecar traffic redirection
+# uses localhost egress which conflicts with egress deny rules.
+# In production with Istio, mTLS + AuthorizationPolicies handle egress control.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: finflow
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+
+---
+# ─── ALLOW DNS ────────────────────────────────────────────────────────────────
+# Without DNS, pods can't resolve service names (transaction-api → IP address)
+# This MUST be allowed for anything to work.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+  namespace: finflow
+spec:
+  podSelector: {}       # All pods need DNS
+  policyTypes:
+    - Egress
+  egress:
+    - to: []            # To any destination (kube-dns could be anywhere)
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+---
+# ─── ALLOW INTRA-NAMESPACE (services talking to each other) ──────────────────
+# All FinFlow services can communicate with each other within the namespace.
+# In production, you'd make this more granular (per-service allow rules).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-finflow-internal
+  namespace: finflow
+spec:
+  podSelector: {}       # All pods in finflow namespace
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector: {}   # From any pod in the SAME namespace
+  egress:
+    - to:
+        - podSelector: {}   # To any pod in the SAME namespace
+
+---
+# ─── ALLOW EGRESS TO KAFKA (cross-namespace) ─────────────────────────────────
+# Services need to reach Kafka brokers in the finflow-kafka namespace
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-kafka-egress
+  namespace: finflow
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: finflow-kafka
+      ports:
+        - protocol: TCP
+          port: 9092    # Kafka broker port
+
+---
+# ─── ALLOW EGRESS TO VAULT (cross-namespace) ─────────────────────────────────
+# Vault Agent needs to reach Vault server for secret injection
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-vault-egress
+  namespace: finflow
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: vault
+      ports:
+        - protocol: TCP
+          port: 8200    # Vault API port
+
+---
+# ─── ALLOW INGRESS FROM MONITORING (Prometheus scraping) ─────────────────────
+# Prometheus needs to reach /metrics endpoints on all services
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-prometheus-scrape
+  namespace: finflow
+spec:
+  podSelector: {}       # All pods (they all expose /metrics)
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: finflow-monitoring
+      ports:
+        - protocol: TCP
+          port: 8080
+        - protocol: TCP
+          port: 8081
+        - protocol: TCP
+          port: 8082
+        - protocol: TCP
+          port: 8083
+        - protocol: TCP
+          port: 8084
+
+---
+# ─── ALLOW INGRESS FROM ISTIO (sidecar + ingress gateway) ────────────────────
+# Istio's ingress gateway and sidecars need to reach pods
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-istio
+  namespace: finflow
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: istio-system
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: istio-system
+      ports:
+        - protocol: TCP
+          port: 15012   # istiod (xDS)
+        - protocol: TCP
+          port: 15014   # istiod (metrics)
