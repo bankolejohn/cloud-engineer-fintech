@@ -1,0 +1,25 @@
+# ConfigMap and Secrets for local development
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: finflow-config
+  namespace: finflow
+data:
+  kafka-bootstrap-servers: "finflow-kafka-bootstrap.finflow-kafka.svc.cluster.local:9092"
+  fraud-threshold: "0.7"
+  payment-processor-url: "http://payment-processor.finflow.svc.cluster.local"
+  fraud-detection-url: "http://fraud-detection.finflow.svc.cluster.local"
+  account-service-url: "http://account-service.finflow.svc.cluster.local"
+  notification-service-url: "http://notification-service.finflow.svc.cluster.local"
+---
+# Placeholder secret (in production this comes from Vault)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: finflow-db-credentials
+  namespace: finflow
+type: Opaque
+stringData:
+  host: "localhost"
+  username: "finflow_app"
+  password: "local-dev-only"

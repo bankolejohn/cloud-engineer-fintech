@@ -1,7 +1,19 @@
-# Kind cluster config for local FinFlow development
+# ==============================================================================
+# Kind Cluster Config — FinFlow Local Development
+#
+# WHY this config:
+# - 1 control plane + 2 workers simulates a real multi-node cluster
+# - extraPortMappings expose ports on localhost (for testing ingress)
+# - Workers simulate different availability zones
+#
+# USAGE: kind create cluster --config local-dev/kind-cluster.yaml
+# ==============================================================================
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 name: finflow
+networking:
+  podSubnet: "10.244.0.0/16"
+  serviceSubnet: "10.96.0.0/16"
 nodes:
   - role: control-plane
     kubeadmConfigPatches:
@@ -20,5 +32,20 @@ nodes:
       - containerPort: 30080
         hostPort: 30080
         protocol: TCP
+      - containerPort: 30081
+        hostPort: 30081
+        protocol: TCP
   - role: worker
+    kubeadmConfigPatches:
+      - |
+        kind: JoinConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "topology.kubernetes.io/zone=zone-a"
   - role: worker
+    kubeadmConfigPatches:
+      - |
+        kind: JoinConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "topology.kubernetes.io/zone=zone-b"
