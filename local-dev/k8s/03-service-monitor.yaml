@@ -1,0 +1,33 @@
+# ==============================================================================
+# ServiceMonitor — Tells Prometheus HOW to scrape FinFlow services
+#
+# WHAT: A Prometheus Operator CRD that auto-configures Prometheus scraping
+# WHY:  Instead of manually editing Prometheus config, you declare what to scrape
+# HOW:  Prometheus Operator watches for ServiceMonitor objects and updates
+#       Prometheus configuration automatically
+#
+# In production: One ServiceMonitor per service (or shared with label selector)
+# ==============================================================================
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: finflow-services
+  namespace: finflow-monitoring
+  labels:
+    release: monitoring    # Must match Prometheus operator's serviceMonitorSelector
+spec:
+  # Which namespaces to look in
+  namespaceSelector:
+    matchNames:
+      - finflow
+
+  # Which Services to scrape (any with app.kubernetes.io/part-of: finflow label)
+  selector:
+    matchLabels: {}    # Select all services in the finflow namespace
+
+  # How to scrape them
+  endpoints:
+    - port: http               # Matches the port NAME in the Service spec
+      path: /metrics           # Path where metrics are exposed
+      interval: 15s            # Scrape every 15 seconds
+      scrapeTimeout: 10s

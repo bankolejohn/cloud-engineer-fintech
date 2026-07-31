@@ -1,0 +1,128 @@
+# ==============================================================================
+# kube-prometheus-stack - Local Development Values
+#
+# WHAT: Prometheus (metrics collection) + Grafana (dashboards) + AlertManager
+# WHY:  See what's happening in your cluster in real-time
+# HOW:  helm install monitoring prometheus-community/kube-prometheus-stack -f this-file.yaml
+#
+# Production differences:
+# - Production: 30-day retention, 100Gi storage, HA (2+ replicas), real alerting
+# - Local: 2-hour retention, minimal storage, single replica, no real alerts
+# ==============================================================================
+
+# Prometheus configuration
+prometheus:
+  prometheusSpec:
+    # Short retention for local (saves disk space)
+    retention: 2h
+    retentionSize: 1GB
+
+    # Minimal resources for Kind cluster
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+
+    # Scrape our finflow services (any pod with prometheus.io/scrape: "true" annotation)
+    podMonitorSelectorNilUsesHelmValues: false
+    serviceMonitorSelectorNilUsesHelmValues: false
+
+    # Additional scrape config to pick up our services by annotation
+    additionalScrapeConfigs:
+      - job_name: 'finflow-services'
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names: ['finflow']
+        relabel_configs:
+          # Only scrape pods with prometheus.io/scrape=true
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            action: keep
+            regex: true
+          # Use the prometheus.io/port annotation as the scrape port
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_port]
+            action: replace
+            target_label: __address__
+            regex: (.+)
+            replacement: ${1}
+          - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+            action: replace
+            regex: ([^:]+)(?::\d+)?;(\d+)
+            replacement: $1:$2
+            target_label: __address__
+          # Use the prometheus.io/path annotation
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+            action: replace
+            target_label: __metrics_path__
+            regex: (.+)
+          # Add pod labels
+          - source_labels: [__meta_kubernetes_pod_label_app]
+            action: replace
+            target_label: app
+          - source_labels: [__meta_kubernetes_namespace]
+            action: replace
+            target_label: namespace
+
+# Grafana configuration
+grafana:
+  # Admin credentials for local access
+  adminUser: admin
+  adminPassword: finflow-local
+
+  # Minimal resources
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+  # Service type for easy access
+  service:
+    type: NodePort
+    nodePort: 30080
+
+# AlertManager configuration
+alertmanager:
+  alertmanagerSpec:
+    resources:
+      requests:
+        cpu: 10m
+        memory: 32Mi
+      limits:
+        cpu: 100m
+        memory: 64Mi
+
+# Node exporter (system metrics per node)
+nodeExporter:
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi
+
+# Kube-state-metrics (K8s object metrics)
+kube-state-metrics:
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi
+
+# Disable components we don't need locally
+kubeEtcd:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeControllerManager:
+  enabled: false
+kubeProxy:
+  enabled: false
