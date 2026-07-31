@@ -1,0 +1,80 @@
+# ==============================================================================
+# Istio Configuration — Local Development
+#
+# WHAT: Installs Istio service mesh on the kind cluster
+# WHY:  Enables mTLS, traffic management, and observability without code changes
+#
+# PRODUCTION DIFFERENCES:
+#   Production (istio/istio-operator.yaml):    Local:
+#   - HA (2+ ingress gateways)               - Single replica of everything
+#   - Egress gateway enabled                  - No egress gateway (saves resources)
+#   - Custom access logging format            - Basic access logging
+#   - Trust domain configured                 - Default trust domain
+#   - Resource-heavy (500m+ CPU per component) - Minimal resources
+#
+# HOW: istioctl install -f local-dev/istio/istio-local.yaml --context kind-finflow
+# ==============================================================================
+apiVersion: install.istio.io/v1alpha1
+kind: IstioOperator
+metadata:
+  name: finflow-istio-local
+spec:
+  profile: demo    # Demo profile includes everything (ingress, egress, tracing)
+
+  meshConfig:
+    # Log every request (useful for learning, too verbose for production)
+    accessLogFile: /dev/stdout
+
+    # Enable mTLS everywhere automatically
+    enableAutoMtls: true
+
+    # Outbound traffic: allow all (ALLOW_ANY) for local dev
+    # Production uses REGISTRY_ONLY (must declare every external service)
+    outboundTrafficPolicy:
+      mode: ALLOW_ANY
+
+    defaultConfig:
+      # Hold app start until proxy is ready (prevents race conditions)
+      holdApplicationUntilProxyStarts: true
+
+  components:
+    # Ingress Gateway (entry point for external traffic)
+    ingressGateways:
+      - name: istio-ingressgateway
+        enabled: true
+        k8s:
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+
+    # Egress Gateway (disabled locally — not needed for learning)
+    egressGateways:
+      - name: istio-egressgateway
+        enabled: false
+
+    # Pilot (control plane) — minimal resources for local
+    pilot:
+      k8s:
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 300m
+            memory: 512Mi
+
+  # Reduce sidecar proxy resource usage
+  values:
+    global:
+      proxy:
+        resources:
+          requests:
+            cpu: 20m
+            memory: 64Mi
+          limits:
+            cpu: 100m
+            memory: 128Mi

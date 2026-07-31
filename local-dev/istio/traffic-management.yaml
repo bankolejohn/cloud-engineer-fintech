@@ -1,0 +1,173 @@
+# ==============================================================================
+# Istio Traffic Management — Local Development
+#
+# WHAT: Defines how traffic routes between service versions
+# WHY:  Enables canary deployments, A/B testing, and traffic splitting
+#       WITHOUT changing application code
+#
+# HOW IT WORKS:
+#   1. DestinationRule defines "subsets" (v1, v2) based on pod labels
+#   2. VirtualService defines routing rules (% traffic to each subset)
+#   3. You deploy v2 pods with label "version: v2"
+#   4. Istio routes traffic according to the rules
+#   5. If v2 is broken → set weight to 0 (instant rollback)
+# ==============================================================================
+
+# --- DestinationRule: Defines subsets and circuit breaking ---
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: transaction-api
+  namespace: finflow
+spec:
+  host: transaction-api
+  trafficPolicy:
+    # Circuit breaker: Eject unhealthy pods
+    outlierDetection:
+      consecutive5xxErrors: 3      # 3 consecutive errors → eject
+      interval: 10s                # Check every 10 seconds
+      baseEjectionTime: 30s        # Ejected for 30 seconds
+      maxEjectionPercent: 50       # Never eject more than 50% of pods
+  subsets:
+    - name: v1
+      labels:
+        version: v1    # Pods with label "version: v1" are in this subset
+    - name: v2
+      labels:
+        version: v2    # Pods with label "version: v2" (canary)
+---
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: payment-processor
+  namespace: finflow
+spec:
+  host: payment-processor
+  trafficPolicy:
+    outlierDetection:
+      consecutive5xxErrors: 3
+      interval: 5s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 30
+  subsets:
+    - name: v1
+      labels:
+        version: v1
+---
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: fraud-detection
+  namespace: finflow
+spec:
+  host: fraud-detection
+  trafficPolicy:
+    outlierDetection:
+      consecutive5xxErrors: 5
+      interval: 10s
+      baseEjectionTime: 15s
+  subsets:
+    - name: v1
+      labels:
+        version: v1
+---
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: account-service
+  namespace: finflow
+spec:
+  host: account-service
+  trafficPolicy:
+    outlierDetection:
+      consecutive5xxErrors: 3
+      interval: 10s
+      baseEjectionTime: 30s
+  subsets:
+    - name: v1
+      labels:
+        version: v1
+---
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: notification-service
+  namespace: finflow
+spec:
+  host: notification-service
+  trafficPolicy:
+    outlierDetection:
+      consecutive5xxErrors: 5
+      interval: 10s
+      baseEjectionTime: 15s
+  subsets:
+    - name: v1
+      labels:
+        version: v1
+
+---
+# --- VirtualService: Routing rules ---
+
+# Transaction API: 100% to v1 (ready for canary when v2 is deployed)
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: transaction-api
+  namespace: finflow
+spec:
+  hosts:
+    - transaction-api
+  http:
+    - route:
+        - destination:
+            host: transaction-api
+            subset: v1
+          weight: 100
+      # Retry policy
+      retries:
+        attempts: 2
+        perTryTimeout: 3s
+        retryOn: 5xx,gateway-error,connect-failure
+      timeout: 10s
+---
+# Payment Processor: 100% to v1 with strict timeout
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: payment-processor
+  namespace: finflow
+spec:
+  hosts:
+    - payment-processor
+  http:
+    - route:
+        - destination:
+            host: payment-processor
+            subset: v1
+          weight: 100
+      retries:
+        attempts: 1          # Only 1 retry for payments (idempotency risk)
+        perTryTimeout: 10s
+        retryOn: gateway-error,connect-failure
+      timeout: 30s           # Longer timeout for payment processing
+---
+# Fraud Detection: 100% to v1
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: fraud-detection
+  namespace: finflow
+spec:
+  hosts:
+    - fraud-detection
+  http:
+    - route:
+        - destination:
+            host: fraud-detection
+            subset: v1
+          weight: 100
+      retries:
+        attempts: 3
+        perTryTimeout: 2s
+        retryOn: 5xx,gateway-error,connect-failure
+      timeout: 5s            # Fraud scoring should be fast
