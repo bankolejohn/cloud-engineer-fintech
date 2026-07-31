@@ -1,0 +1,55 @@
+# ==============================================================================
+# ArgoCD Application — FinFlow Services (Local Dev)
+#
+# WHAT: Tells ArgoCD to watch our GitHub repo and deploy the local-dev manifests
+# WHY:  GitOps — Git is the source of truth. Change Git → cluster updates automatically.
+#       No more `kubectl apply` manually. Deploy by merging PRs.
+#
+# HOW IT WORKS:
+#   1. ArgoCD watches the Git repo (every 3 minutes by default)
+#   2. Compares: What's in Git (desired state) vs What's in cluster (actual state)
+#   3. If they differ → ArgoCD syncs (applies the changes)
+#   4. If someone manually changes the cluster → ArgoCD reverts it (self-heal)
+#
+# PRODUCTION DIFFERENCES:
+#   Production: Uses kubernetes/overlays/prod (full replicas, real images, Vault)
+#   Local:      Uses local-dev/k8s/ (single replica, local images, placeholder secrets)
+# ==============================================================================
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: finflow-services
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: finflow
+  # Finalizer ensures ArgoCD cleans up resources when app is deleted
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  # Which ArgoCD project (default = no restrictions)
+  project: default
+
+  # WHERE to get the manifests
+  source:
+    repoURL: https://github.com/bankolejohn/cloud-engineer-fintech.git
+    targetRevision: local-dev       # Watch the local-dev branch
+    path: local-dev/k8s             # Deploy manifests from this folder
+
+  # WHERE to deploy them
+  destination:
+    server: https://kubernetes.default.svc   # This cluster (in-cluster)
+    namespace: finflow
+
+  # HOW to sync
+  syncPolicy:
+    automated:
+      prune: true        # Delete resources from cluster if removed from Git
+      selfHeal: true     # Revert manual cluster changes to match Git
+    syncOptions:
+      - CreateNamespace=true    # Create namespace if it doesn't exist
+    retry:
+      limit: 3           # Retry sync up to 3 times on failure
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 1m
