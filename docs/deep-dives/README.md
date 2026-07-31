@@ -13,6 +13,7 @@ Detailed explanations of each technology in this project. Read these alongside t
 | 05 | [ProxySQL Database Proxy](./05-proxysql-database-proxy.md) | How do you scale MySQL and handle failover? |
 | 06 | [Terraform Multi-Cloud](./06-terraform-multi-cloud.md) | How do the modules compose across 4 clouds? |
 | 07 | [CI/CD Pipeline](./07-cicd-pipeline.md) | How does code go from git push to production? |
+| 08 | [Kafka Operations & Roles](./08-kafka-operations-roles.md) | Who creates topics and users? What's the workflow? |
 
 ## Reading Order
 
