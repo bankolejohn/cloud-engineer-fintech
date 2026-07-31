@@ -1,0 +1,40 @@
+# Values for payment-processor deployment
+nameOverride: "payment-processor"
+fullnameOverride: "payment-processor"
+
+replicaCount: 3
+
+image:
+  repository: gcr.io/finflow/payment-processor
+  tag: "v1.0.0"
+
+service:
+  port: 80
+  targetPort: 8081
+
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: "1"
+    memory: 512Mi
+
+env:
+  - name: PORT
+    value: "8081"
+  - name: SERVICE_NAME
+    value: "payment-processor"
+  - name: KAFKA_BOOTSTRAP_SERVERS
+    value: "finflow-kafka-bootstrap.finflow-kafka.svc.cluster.local:9092"
+
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 15
+  targetCPUUtilizationPercentage: 60
+
+# Higher PDB for critical payment processing
+pdb:
+  enabled: true
+  minAvailable: 2

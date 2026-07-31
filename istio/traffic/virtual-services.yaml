@@ -1,0 +1,138 @@
+# ==============================================================================
+# Istio VirtualServices - Traffic routing for all FinFlow services
+# ==============================================================================
+
+# Transaction API - Main entry point with canary routing
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: transaction-api
+  namespace: finflow
+spec:
+  hosts:
+    - transaction-api
+    - "api.finflow.io"
+  gateways:
+    - finflow-gateway
+    - mesh
+  http:
+    # Canary: Route 10% to v2, 90% to v1
+    - match:
+        - headers:
+            x-canary:
+              exact: "true"
+      route:
+        - destination:
+            host: transaction-api
+            subset: v2
+          weight: 100
+    - route:
+        - destination:
+            host: transaction-api
+            subset: v1
+          weight: 90
+        - destination:
+            host: transaction-api
+            subset: v2
+          weight: 10
+      timeout: 10s
+      retries:
+        attempts: 3
+        perTryTimeout: 3s
+        retryOn: gateway-error,connect-failure,refused-stream,unavailable,cancelled,resource-exhausted
+---
+# Payment Processor - Internal service with load balancing
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: payment-processor
+  namespace: finflow
+spec:
+  hosts:
+    - payment-processor
+  http:
+    - route:
+        - destination:
+            host: payment-processor
+            subset: v1
+          weight: 100
+      timeout: 30s  # Higher timeout for payment processing
+      retries:
+        attempts: 2
+        perTryTimeout: 10s
+        retryOn: gateway-error,connect-failure,refused-stream
+      # Fault injection for testing (disabled by default)
+      # fault:
+      #   delay:
+      #     percentage:
+      #       value: 5.0
+      #     fixedDelay: 2s
+---
+# Fraud Detection - A/B testing between ML models
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: fraud-detection
+  namespace: finflow
+spec:
+  hosts:
+    - fraud-detection
+  http:
+    # A/B test: Route requests with specific header to v2 (new ML model)
+    - match:
+        - headers:
+            x-ab-test:
+              exact: "model-v2"
+      route:
+        - destination:
+            host: fraud-detection
+            subset: v2
+    # Default traffic to stable version
+    - route:
+        - destination:
+            host: fraud-detection
+            subset: v1
+          weight: 100
+      timeout: 5s
+      retries:
+        attempts: 2
+        perTryTimeout: 2s
+---
+# Account Service
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: account-service
+  namespace: finflow
+spec:
+  hosts:
+    - account-service
+  http:
+    - route:
+        - destination:
+            host: account-service
+            subset: v1
+      timeout: 10s
+      retries:
+        attempts: 3
+        perTryTimeout: 3s
+        retryOn: gateway-error,connect-failure,refused-stream
+---
+# Notification Service
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: notification-service
+  namespace: finflow
+spec:
+  hosts:
+    - notification-service
+  http:
+    - route:
+        - destination:
+            host: notification-service
+            subset: v1
+      timeout: 15s
+      retries:
+        attempts: 3
+        perTryTimeout: 5s

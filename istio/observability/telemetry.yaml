@@ -1,0 +1,84 @@
+# ==============================================================================
+# Istio Telemetry Configuration
+# Metrics, tracing, and access logging
+# ==============================================================================
+
+# Telemetry API - Configure mesh-wide observability
+apiVersion: telemetry.istio.io/v1alpha1
+kind: Telemetry
+metadata:
+  name: finflow-telemetry
+  namespace: finflow
+spec:
+  # Tracing configuration
+  tracing:
+    - providers:
+        - name: jaeger
+      randomSamplingPercentage: 100.0  # 100% for dev, reduce for prod
+      customTags:
+        environment:
+          literal:
+            value: "production"
+        service.version:
+          header:
+            name: x-service-version
+            defaultValue: "unknown"
+  
+  # Metrics configuration
+  metrics:
+    - providers:
+        - name: prometheus
+      overrides:
+        # Add custom dimensions to standard metrics
+        - match:
+            metric: REQUEST_COUNT
+            mode: CLIENT_AND_SERVER
+          tagOverrides:
+            response_code:
+              operation: UPSERT
+            request_protocol:
+              operation: UPSERT
+        - match:
+            metric: REQUEST_DURATION
+            mode: CLIENT_AND_SERVER
+          tagOverrides:
+            response_code:
+              operation: UPSERT
+  
+  # Access logging
+  accessLogging:
+    - providers:
+        - name: envoy
+      filter:
+        expression: "response.code >= 400 || connection.mtls == false"
+---
+# EnvoyFilter for custom metrics
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: finflow-custom-metrics
+  namespace: finflow
+spec:
+  configPatches:
+    - applyTo: HTTP_FILTER
+      match:
+        context: SIDECAR_INBOUND
+        listener:
+          filterChain:
+            filter:
+              name: "envoy.filters.network.http_connection_manager"
+              subFilter:
+                name: "envoy.filters.http.router"
+      patch:
+        operation: INSERT_BEFORE
+        value:
+          name: envoy.filters.http.wasm
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.filters.http.wasm.v3.Wasm
+            config:
+              root_id: "finflow_metrics"
+              vm_config:
+                runtime: "envoy.wasm.runtime.null"
+                code:
+                  local:
+                    inline_string: "envoy.wasm.metadata_exchange"

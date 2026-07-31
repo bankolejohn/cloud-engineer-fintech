@@ -1,0 +1,72 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fraud-detection
+  namespace: finflow
+  labels:
+    app: fraud-detection
+    version: v1
+    app.kubernetes.io/name: fraud-detection
+    app.kubernetes.io/part-of: finflow
+    app.kubernetes.io/component: detection
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: fraud-detection
+      version: v1
+  template:
+    metadata:
+      labels:
+        app: fraud-detection
+        version: v1
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8083"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: fraud-detection
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: fraud-detection
+          image: gcr.io/finflow/fraud-detection:latest
+          ports:
+            - name: http
+              containerPort: 8083
+              protocol: TCP
+          env:
+            - name: PORT
+              value: "8083"
+            - name: SERVICE_NAME
+              value: "fraud-detection"
+            - name: FRAUD_THRESHOLD
+              valueFrom:
+                configMapKeyRef:
+                  name: finflow-config
+                  key: fraud-threshold
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              valueFrom:
+                configMapKeyRef:
+                  name: finflow-config
+                  key: kafka-bootstrap-servers
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10

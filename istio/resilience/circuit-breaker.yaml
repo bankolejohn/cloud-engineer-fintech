@@ -1,0 +1,85 @@
+# ==============================================================================
+# Istio Resilience - Circuit Breaking Configuration
+# Protects services from cascading failures
+# ==============================================================================
+
+# Payment Processor - Aggressive circuit breaking (payment critical path)
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: payment-processor-circuit-breaker
+  namespace: finflow
+spec:
+  host: payment-processor
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 50
+        connectTimeout: 3s
+        tcpKeepalive:
+          time: 7200s
+          interval: 75s
+      http:
+        http1MaxPendingRequests: 50
+        http2MaxRequests: 100
+        maxRequestsPerConnection: 10
+        maxRetries: 2
+        idleTimeout: 60s
+    outlierDetection:
+      # Eject after 3 consecutive 5xx errors
+      consecutive5xxErrors: 3
+      # Check every 5 seconds
+      interval: 5s
+      # Eject for minimum 30 seconds
+      baseEjectionTime: 30s
+      # Maximum 30% of hosts can be ejected
+      maxEjectionPercent: 30
+      # Minimum health percentage
+      minHealthPercent: 70
+      # Also consider gateway errors
+      consecutiveGatewayErrors: 3
+---
+# Fraud Detection - Allow more errors (ML model may have transient failures)
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: fraud-detection-circuit-breaker
+  namespace: finflow
+spec:
+  host: fraud-detection
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 100
+      http:
+        http1MaxPendingRequests: 100
+        http2MaxRequests: 500
+        maxRetries: 3
+    outlierDetection:
+      consecutive5xxErrors: 10
+      interval: 10s
+      baseEjectionTime: 15s
+      maxEjectionPercent: 50
+---
+# Account Service - Moderate circuit breaking
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: account-service-circuit-breaker
+  namespace: finflow
+spec:
+  host: account-service
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 100
+        connectTimeout: 5s
+      http:
+        http1MaxPendingRequests: 100
+        http2MaxRequests: 500
+        maxRequestsPerConnection: 20
+    outlierDetection:
+      consecutive5xxErrors: 5
+      interval: 10s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 40

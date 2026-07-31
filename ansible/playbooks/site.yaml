@@ -1,0 +1,75 @@
+# ==============================================================================
+# Ansible Site Playbook - FinFlow Infrastructure
+# Orchestrates all provisioning and configuration
+# ==============================================================================
+---
+- name: Configure all FinFlow infrastructure
+  hosts: all
+  become: true
+  
+  pre_tasks:
+    - name: Update apt cache (Debian/Ubuntu)
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+      when: ansible_os_family == "Debian"
+
+  roles:
+    - role: common
+      tags: [common, always]
+    - role: security-hardening
+      tags: [security]
+
+# HAProxy load balancers
+- name: Configure HAProxy nodes
+  hosts: haproxy
+  become: true
+  roles:
+    - role: haproxy
+      tags: [haproxy, loadbalancer]
+    - role: keepalived
+      tags: [keepalived, ha]
+
+# Nginx reverse proxies
+- name: Configure Nginx nodes
+  hosts: nginx
+  become: true
+  roles:
+    - role: nginx
+      tags: [nginx, proxy]
+
+# Database servers
+- name: Configure MySQL servers
+  hosts: mysql
+  become: true
+  roles:
+    - role: mysql
+      tags: [mysql, database]
+    - role: proxysql
+      tags: [proxysql, database]
+
+# Kafka brokers (bare-metal/VM deployments)
+- name: Configure Kafka brokers
+  hosts: kafka
+  become: true
+  roles:
+    - role: kafka
+      tags: [kafka, messaging]
+
+# Vault servers
+- name: Configure Vault servers
+  hosts: vault
+  become: true
+  roles:
+    - role: vault
+      tags: [vault, secrets]
+
+# Monitoring servers
+- name: Configure monitoring stack
+  hosts: monitoring
+  become: true
+  roles:
+    - role: prometheus
+      tags: [prometheus, monitoring]
+    - role: grafana
+      tags: [grafana, monitoring]

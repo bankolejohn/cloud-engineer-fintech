@@ -1,0 +1,117 @@
+# ==============================================================================
+# Security Hardening Role
+# CIS benchmark-aligned server hardening
+# ==============================================================================
+---
+- name: Disable root SSH login
+  lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: '^PermitRootLogin'
+    line: 'PermitRootLogin no'
+  notify: restart sshd
+
+- name: Disable password authentication
+  lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: '^PasswordAuthentication'
+    line: 'PasswordAuthentication no'
+  notify: restart sshd
+
+- name: Set SSH idle timeout
+  lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: '^ClientAliveInterval'
+    line: 'ClientAliveInterval 300'
+  notify: restart sshd
+
+- name: Install and configure UFW firewall
+  apt:
+    name: ufw
+    state: present
+
+- name: Set default UFW policies
+  ufw:
+    direction: "{{ item.direction }}"
+    policy: "{{ item.policy }}"
+  loop:
+    - { direction: 'incoming', policy: 'deny' }
+    - { direction: 'outgoing', policy: 'allow' }
+
+- name: Allow SSH
+  ufw:
+    rule: allow
+    port: '22'
+    proto: tcp
+
+- name: Allow application-specific ports
+  ufw:
+    rule: allow
+    port: "{{ item }}"
+    proto: tcp
+    src: "{{ trusted_cidr | default('10.0.0.0/8') }}"
+  loop: "{{ allowed_ports | default([]) }}"
+
+- name: Enable UFW
+  ufw:
+    state: enabled
+
+- name: Install fail2ban
+  apt:
+    name: fail2ban
+    state: present
+
+- name: Configure fail2ban for SSH
+  copy:
+    content: |
+      [sshd]
+      enabled = true
+      port = ssh
+      filter = sshd
+      logpath = /var/log/auth.log
+      maxretry = 3
+      bantime = 3600
+      findtime = 600
+    dest: /etc/fail2ban/jail.local
+    mode: '0644'
+  notify: restart fail2ban
+
+- name: Disable unused services
+  service:
+    name: "{{ item }}"
+    state: stopped
+    enabled: no
+  loop:
+    - bluetooth
+    - avahi-daemon
+  ignore_errors: yes
+
+- name: Set proper permissions on sensitive files
+  file:
+    path: "{{ item }}"
+    mode: '0600'
+  loop:
+    - /etc/shadow
+    - /etc/gshadow
+  ignore_errors: yes
+
+- name: Install and configure auditd
+  apt:
+    name: auditd
+    state: present
+
+- name: Start auditd
+  service:
+    name: auditd
+    state: started
+    enabled: yes
+
+handlers:
+  - name: restart sshd
+    service:
+      name: sshd
+      state: restarted
+
+  - name: restart fail2ban
+    service:
+      name: fail2ban
+      state: restarted

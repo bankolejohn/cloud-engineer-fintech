@@ -1,0 +1,134 @@
+# ==============================================================================
+# Istio AuthorizationPolicies - Fine-grained access control
+# ==============================================================================
+
+# Default: Deny all traffic in finflow namespace (zero-trust)
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: deny-all
+  namespace: finflow
+spec:
+  {}  # Empty spec = deny all
+---
+# Allow ingress gateway to reach transaction-api
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-ingress-to-transaction-api
+  namespace: finflow
+spec:
+  selector:
+    matchLabels:
+      app: transaction-api
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            namespaces: ["istio-system"]
+            principals: ["cluster.local/ns/istio-system/sa/istio-ingressgateway-service-account"]
+      to:
+        - operation:
+            methods: ["GET", "POST", "PATCH"]
+            paths: ["/api/v1/*", "/health", "/ready"]
+---
+# Allow transaction-api to call payment-processor
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-transaction-to-payment
+  namespace: finflow
+spec:
+  selector:
+    matchLabels:
+      app: payment-processor
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals: ["cluster.local/ns/finflow/sa/transaction-api"]
+      to:
+        - operation:
+            methods: ["POST"]
+            paths: ["/api/v1/process", "/api/v1/validate"]
+---
+# Allow transaction-api to call fraud-detection
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-transaction-to-fraud
+  namespace: finflow
+spec:
+  selector:
+    matchLabels:
+      app: fraud-detection
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals: ["cluster.local/ns/finflow/sa/transaction-api"]
+      to:
+        - operation:
+            methods: ["POST"]
+            paths: ["/api/v1/score", "/api/v1/batch-score"]
+---
+# Allow transaction-api and payment-processor to call account-service
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-to-account-service
+  namespace: finflow
+spec:
+  selector:
+    matchLabels:
+      app: account-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/finflow/sa/transaction-api"
+              - "cluster.local/ns/finflow/sa/payment-processor"
+      to:
+        - operation:
+            methods: ["GET", "POST"]
+            paths: ["/api/v1/*"]
+---
+# Allow payment-processor to call notification-service
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-payment-to-notification
+  namespace: finflow
+spec:
+  selector:
+    matchLabels:
+      app: notification-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/finflow/sa/payment-processor"
+              - "cluster.local/ns/finflow/sa/transaction-api"
+      to:
+        - operation:
+            methods: ["POST"]
+            paths: ["/api/v1/notify", "/api/v1/notify/batch"]
+---
+# Allow Prometheus to scrape all services
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-prometheus-scrape
+  namespace: finflow
+spec:
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            namespaces: ["finflow-monitoring"]
+      to:
+        - operation:
+            methods: ["GET"]
+            paths: ["/metrics", "/health", "/ready"]

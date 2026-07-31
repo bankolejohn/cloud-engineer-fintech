@@ -1,0 +1,101 @@
+# ==============================================================================
+# Common Role - Base configuration for all servers
+# ==============================================================================
+---
+- name: Set hostname
+  hostname:
+    name: "{{ inventory_hostname }}"
+
+- name: Set timezone
+  timezone:
+    name: "{{ timezone | default('UTC') }}"
+
+- name: Install common packages
+  apt:
+    name:
+      - curl
+      - wget
+      - vim
+      - htop
+      - iotop
+      - net-tools
+      - dnsutils
+      - jq
+      - unzip
+      - python3-pip
+      - ca-certificates
+      - gnupg
+      - lsb-release
+      - apt-transport-https
+    state: present
+  when: ansible_os_family == "Debian"
+
+- name: Configure sysctl for performance
+  sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    sysctl_set: yes
+    state: present
+    reload: yes
+  loop:
+    - { key: 'vm.swappiness', value: '10' }
+    - { key: 'net.core.somaxconn', value: '65535' }
+    - { key: 'net.core.netdev_max_backlog', value: '65535' }
+    - { key: 'net.ipv4.tcp_max_syn_backlog', value: '65535' }
+    - { key: 'net.ipv4.tcp_fin_timeout', value: '30' }
+    - { key: 'net.ipv4.tcp_keepalive_time', value: '300' }
+    - { key: 'net.ipv4.tcp_tw_reuse', value: '1' }
+    - { key: 'fs.file-max', value: '2097152' }
+
+- name: Set file descriptor limits
+  pam_limits:
+    domain: '*'
+    limit_type: "{{ item.type }}"
+    limit_item: nofile
+    value: "{{ item.value }}"
+  loop:
+    - { type: 'soft', value: '65535' }
+    - { type: 'hard', value: '65535' }
+
+- name: Configure NTP (chrony)
+  apt:
+    name: chrony
+    state: present
+  when: ansible_os_family == "Debian"
+
+- name: Enable chrony
+  service:
+    name: chrony
+    state: started
+    enabled: yes
+
+- name: Create finflow system user
+  user:
+    name: finflow
+    system: yes
+    shell: /bin/false
+    home: /opt/finflow
+    create_home: yes
+
+- name: Create log directory
+  file:
+    path: /var/log/finflow
+    state: directory
+    owner: finflow
+    group: finflow
+    mode: '0755'
+
+- name: Configure logrotate for finflow
+  copy:
+    content: |
+      /var/log/finflow/*.log {
+          daily
+          rotate 14
+          compress
+          delaycompress
+          missingok
+          notifempty
+          create 0640 finflow finflow
+      }
+    dest: /etc/logrotate.d/finflow
+    mode: '0644'

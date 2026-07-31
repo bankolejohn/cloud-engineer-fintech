@@ -1,0 +1,76 @@
+# ==============================================================================
+# Istio Egress Gateway Configuration
+# Controls and monitors outbound traffic from the mesh
+# ==============================================================================
+
+# Route external payment gateway traffic through egress gateway
+apiVersion: networking.istio.io/v1beta1
+kind: Gateway
+metadata:
+  name: finflow-egress-gateway
+  namespace: finflow
+spec:
+  selector:
+    istio: egressgateway
+  servers:
+    - port:
+        number: 443
+        name: tls
+        protocol: TLS
+      hosts:
+        - "api.paymentgateway.com"
+        - "api.sendgrid.com"
+        - "api.twilio.com"
+      tls:
+        mode: PASSTHROUGH
+---
+# VirtualService to route external traffic through egress gateway
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: payment-gateway-egress
+  namespace: finflow
+spec:
+  hosts:
+    - "api.paymentgateway.com"
+  gateways:
+    - mesh
+    - finflow-egress-gateway
+  tls:
+    # From mesh to egress gateway
+    - match:
+        - gateways:
+            - mesh
+          port: 443
+          sniHosts:
+            - "api.paymentgateway.com"
+      route:
+        - destination:
+            host: istio-egressgateway.istio-system.svc.cluster.local
+            port:
+              number: 443
+    # From egress gateway to external
+    - match:
+        - gateways:
+            - finflow-egress-gateway
+          port: 443
+          sniHosts:
+            - "api.paymentgateway.com"
+      route:
+        - destination:
+            host: "api.paymentgateway.com"
+            port:
+              number: 443
+---
+# DestinationRule for egress traffic (TLS origination)
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: payment-gateway-egress-dr
+  namespace: finflow
+spec:
+  host: "api.paymentgateway.com"
+  trafficPolicy:
+    tls:
+      mode: SIMPLE
+      sni: "api.paymentgateway.com"

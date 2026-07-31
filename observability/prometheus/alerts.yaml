@@ -1,0 +1,161 @@
+# ==============================================================================
+# Prometheus Alerting Rules - FinFlow Platform
+# ==============================================================================
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: finflow-alerts
+  namespace: finflow-monitoring
+  labels:
+    app.kubernetes.io/part-of: finflow
+spec:
+  groups:
+    # =========================================================================
+    # Service Health Alerts
+    # =========================================================================
+    - name: finflow.service.health
+      rules:
+        - alert: ServiceDown
+          expr: up{namespace="finflow"} == 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Service {{ $labels.job }} is down"
+            description: "{{ $labels.job }} has been down for more than 1 minute"
+            runbook: "https://wiki.finflow.io/runbooks/service-down"
+
+        - alert: HighErrorRate
+          expr: |
+            sum(rate(finflow_http_requests_total{status=~"5.*"}[5m])) by (job)
+            / sum(rate(finflow_http_requests_total[5m])) by (job) > 0.05
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "High error rate on {{ $labels.job }}"
+            description: "Error rate is {{ $value | humanizePercentage }} (threshold: 5%)"
+
+        - alert: HighLatencyP99
+          expr: |
+            histogram_quantile(0.99,
+              sum(rate(finflow_http_request_duration_seconds_bucket[5m])) by (le, job)
+            ) > 2
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High P99 latency on {{ $labels.job }}"
+            description: "P99 latency is {{ $value }}s (threshold: 2s)"
+
+    # =========================================================================
+    # Payment Processing Alerts
+    # =========================================================================
+    - name: finflow.payments
+      rules:
+        - alert: PaymentFailureRateHigh
+          expr: |
+            sum(rate(finflow_payments_processed_total{status="failed"}[5m]))
+            / sum(rate(finflow_payments_processed_total[5m])) > 0.1
+          for: 2m
+          labels:
+            severity: critical
+            team: payments
+          annotations:
+            summary: "Payment failure rate exceeds 10%"
+            description: "Current failure rate: {{ $value | humanizePercentage }}"
+
+        - alert: PaymentProcessingSlowdown
+          expr: |
+            histogram_quantile(0.95,
+              sum(rate(finflow_payment_processing_duration_ms_bucket[5m])) by (le)
+            ) > 5000
+          for: 3m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Payment processing P95 exceeds 5 seconds"
+
+    # =========================================================================
+    # Kafka Alerts
+    # =========================================================================
+    - name: finflow.kafka
+      rules:
+        - alert: KafkaConsumerLag
+          expr: kafka_consumergroup_lag_sum > 10000
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Kafka consumer group {{ $labels.consumergroup }} has high lag"
+            description: "Consumer lag: {{ $value }} messages"
+
+        - alert: KafkaBrokerDown
+          expr: kafka_server_replicamanager_leadercount == 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Kafka broker has no leader partitions"
+
+        - alert: KafkaUnderReplicatedPartitions
+          expr: kafka_server_replicamanager_underreplicatedpartitions > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Kafka has {{ $value }} under-replicated partitions"
+
+    # =========================================================================
+    # Database Alerts
+    # =========================================================================
+    - name: finflow.database
+      rules:
+        - alert: DatabaseConnectionPoolExhausted
+          expr: |
+            mysql_global_status_threads_connected
+            / mysql_global_variables_max_connections > 0.8
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            summary: "MySQL connection pool is 80% utilized"
+
+        - alert: DatabaseReplicationLag
+          expr: mysql_slave_status_seconds_behind_master > 30
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "MySQL replication lag is {{ $value }}s"
+
+    # =========================================================================
+    # Infrastructure Alerts
+    # =========================================================================
+    - name: finflow.infrastructure
+      rules:
+        - alert: PodCrashLooping
+          expr: rate(kube_pod_container_status_restarts_total{namespace="finflow"}[15m]) > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pod {{ $labels.pod }} is crash-looping"
+
+        - alert: PersistentVolumeAlmostFull
+          expr: |
+            kubelet_volume_stats_used_bytes{namespace=~"finflow.*"}
+            / kubelet_volume_stats_capacity_bytes > 0.85
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "PV {{ $labels.persistentvolumeclaim }} is 85% full"
+
+        - alert: NodeMemoryPressure
+          expr: kube_node_status_condition{condition="MemoryPressure",status="true"} == 1
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Node {{ $labels.node }} has memory pressure"

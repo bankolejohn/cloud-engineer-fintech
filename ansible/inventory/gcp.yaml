@@ -1,0 +1,40 @@
+# ==============================================================================
+# Ansible Dynamic Inventory - GCP
+# Uses gcp_compute plugin for auto-discovery
+# ==============================================================================
+plugin: gcp_compute
+projects:
+  - finflow-prod
+regions:
+  - us-central1
+
+auth_kind: serviceaccount
+service_account_file: "{{ lookup('env', 'GCP_SERVICE_ACCOUNT_FILE') }}"
+
+# Group instances by labels
+keyed_groups:
+  - key: labels.role
+    prefix: role
+  - key: labels.environment
+    prefix: env
+  - key: zone
+    prefix: zone
+
+# Map GCP labels to Ansible groups
+groups:
+  haproxy: "'haproxy' in labels.role"
+  nginx: "'nginx' in labels.role"
+  mysql: "'mysql' in labels.role"
+  kafka: "'kafka' in labels.role"
+  vault: "'vault' in labels.role"
+  monitoring: "'monitoring' in labels.role"
+
+# Host variables from instance metadata
+compose:
+  ansible_host: networkInterfaces[0].accessConfigs[0].natIP | default(networkInterfaces[0].networkIP)
+  ansible_user: finflow
+
+# Filters
+filters:
+  - status = RUNNING
+  - labels.project = finflow

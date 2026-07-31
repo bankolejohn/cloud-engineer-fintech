@@ -1,0 +1,112 @@
+# ==============================================================================
+# Nginx Ingress Controller Configuration for Kubernetes
+# Works alongside Istio Ingress Gateway for external traffic routing
+# ==============================================================================
+
+# Nginx Ingress Controller Helm values
+# Install with: helm install ingress-nginx ingress-nginx/ingress-nginx -f k8s-ingress.yaml
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-ingress-config
+  namespace: ingress-nginx
+data:
+  # Performance tuning
+  worker-processes: "auto"
+  max-worker-connections: "10240"
+  keep-alive: "75"
+  keep-alive-requests: "100"
+  upstream-keepalive-connections: "32"
+  
+  # Rate limiting
+  limit-req-status-code: "429"
+  
+  # Security
+  server-tokens: "false"
+  ssl-protocols: "TLSv1.2 TLSv1.3"
+  ssl-ciphers: "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384"
+  hsts: "true"
+  hsts-max-age: "31536000"
+  hsts-include-subdomains: "true"
+  
+  # Logging (JSON format for log aggregation)
+  log-format-upstream: '{"time":"$time_iso8601","remote_addr":"$remote_addr","request":"$request","status":$status,"body_bytes_sent":$body_bytes_sent,"request_time":$request_time,"upstream_response_time":"$upstream_response_time","request_id":"$req_id"}'
+  
+  # Proxy settings
+  proxy-body-size: "10m"
+  proxy-connect-timeout: "5"
+  proxy-read-timeout: "30"
+  proxy-send-timeout: "10"
+  
+  # Enable Prometheus metrics
+  enable-prometheus-metrics: "true"
+
+---
+# Ingress resource for FinFlow API
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: finflow-api-ingress
+  namespace: finflow
+  annotations:
+    kubernetes.io/ingress.class: "nginx"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    
+    # Rate limiting annotations
+    nginx.ingress.kubernetes.io/limit-rps: "50"
+    nginx.ingress.kubernetes.io/limit-burst-multiplier: "5"
+    nginx.ingress.kubernetes.io/limit-connections: "20"
+    
+    # Security
+    nginx.ingress.kubernetes.io/server-snippet: |
+      if ($bad_bot) { return 403; }
+    
+    # CORS
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/cors-allow-origin: "https://app.finflow.io"
+    nginx.ingress.kubernetes.io/cors-allow-methods: "GET, POST, PATCH, DELETE, OPTIONS"
+    nginx.ingress.kubernetes.io/cors-allow-headers: "Authorization, Content-Type, X-Request-ID"
+    
+    # Custom headers
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      proxy_set_header X-Request-ID $request_id;
+      more_set_headers "X-Content-Type-Options: nosniff";
+      more_set_headers "X-Frame-Options: DENY";
+spec:
+  tls:
+    - hosts:
+        - api.finflow.io
+      secretName: finflow-tls
+  rules:
+    - host: api.finflow.io
+      http:
+        paths:
+          - path: /api/v1/transactions
+            pathType: Prefix
+            backend:
+              service:
+                name: transaction-api
+                port:
+                  number: 80
+          - path: /api/v1/accounts
+            pathType: Prefix
+            backend:
+              service:
+                name: account-service
+                port:
+                  number: 80
+          - path: /api/v1/score
+            pathType: Prefix
+            backend:
+              service:
+                name: fraud-detection
+                port:
+                  number: 80
+          - path: /api/v1/notify
+            pathType: Prefix
+            backend:
+              service:
+                name: notification-service
+                port:
+                  number: 80

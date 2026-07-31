@@ -1,0 +1,325 @@
+# ==============================================================================
+# Harness Deployment Pipeline - FinFlow Platform
+# Multi-stage deployment with approval gates and rollback
+# ==============================================================================
+
+pipeline:
+  name: FinFlow Service Deployment
+  identifier: finflow_service_deploy
+  projectIdentifier: finflow
+  orgIdentifier: default
+  description: "Deploy FinFlow services across multi-cloud Kubernetes clusters"
+  
+  properties:
+    ci:
+      codebase:
+        connectorRef: github_finflow
+        repoName: finflow-platform
+        build: <+input>
+
+  stages:
+    # =========================================================================
+    # Stage 1: Build & Test
+    # =========================================================================
+    - stage:
+        name: Build and Test
+        identifier: build_test
+        type: CI
+        spec:
+          cloneCodebase: true
+          infrastructure:
+            type: KubernetesDirect
+            spec:
+              connectorRef: gke_connector
+              namespace: harness-builds
+              automountServiceAccountToken: true
+          execution:
+            steps:
+              - step:
+                  type: Run
+                  name: Run Tests
+                  identifier: run_tests
+                  spec:
+                    connectorRef: dockerhub
+                    image: golang:1.21
+                    shell: Sh
+                    command: |
+                      cd services/<+pipeline.variables.service_name>
+                      go mod download
+                      go test -v -race -coverprofile=coverage.out ./...
+                      go build -ldflags="-w -s" -o /tmp/app .
+              
+              - step:
+                  type: BuildAndPushGCR
+                  name: Build and Push Image
+                  identifier: build_push
+                  spec:
+                    connectorRef: gcp_connector
+                    host: gcr.io
+                    projectID: finflow-prod
+                    imageName: <+pipeline.variables.service_name>
+                    tags:
+                      - <+pipeline.sequenceId>
+                      - <+codebase.commitSha>
+                      - latest
+                    dockerfile: docker/<+pipeline.variables.service_name>.Dockerfile
+                    context: .
+              
+              - step:
+                  type: AquaTrivy
+                  name: Container Scan
+                  identifier: container_scan
+                  spec:
+                    mode: container
+                    config: default
+                    target:
+                      type: container
+                      detection: auto
+                    advanced:
+                      log:
+                        level: info
+                    privileged: true
+                    image:
+                      type: docker_v2
+                      name: gcr.io/finflow-prod/<+pipeline.variables.service_name>
+                      tag: <+pipeline.sequenceId>
+
+    # =========================================================================
+    # Stage 2: Deploy to Dev
+    # =========================================================================
+    - stage:
+        name: Deploy to Dev
+        identifier: deploy_dev
+        type: Deployment
+        spec:
+          deploymentType: Kubernetes
+          service:
+            serviceRef: <+pipeline.variables.service_name>
+            serviceInputs:
+              serviceDefinition:
+                type: Kubernetes
+                spec:
+                  artifacts:
+                    primary:
+                      primaryArtifactRef: gcr_image
+                      sources:
+                        - identifier: gcr_image
+                          type: Gcr
+                          spec:
+                            tag: <+pipeline.sequenceId>
+          environment:
+            environmentRef: dev
+            deployToAll: false
+            infrastructureDefinitions:
+              - identifier: gke_dev
+          execution:
+            steps:
+              - step:
+                  type: K8sRollingDeploy
+                  name: Rolling Deploy
+                  identifier: rolling_deploy_dev
+                  spec:
+                    skipDryRun: false
+                    pruningEnabled: true
+                  timeout: 10m
+
+              - step:
+                  type: Http
+                  name: Health Check
+                  identifier: health_check_dev
+                  spec:
+                    url: http://<+pipeline.variables.service_name>.finflow-dev.svc.cluster.local/health
+                    method: GET
+                    assertion: <+httpResponseCode> == 200
+                  timeout: 2m
+
+            rollbackSteps:
+              - step:
+                  type: K8sRollingRollback
+                  name: Rollback Dev
+                  identifier: rollback_dev
+                  spec: {}
+
+    # =========================================================================
+    # Stage 3: Integration Tests
+    # =========================================================================
+    - stage:
+        name: Integration Tests
+        identifier: integration_tests
+        type: CI
+        spec:
+          cloneCodebase: true
+          infrastructure:
+            type: KubernetesDirect
+            spec:
+              connectorRef: gke_connector
+              namespace: harness-builds
+          execution:
+            steps:
+              - step:
+                  type: Run
+                  name: API Integration Tests
+                  identifier: api_tests
+                  spec:
+                    image: postman/newman:latest
+                    shell: Sh
+                    command: |
+                      newman run tests/postman/finflow-api.json \
+                        --environment tests/postman/dev-env.json \
+                        --reporters cli,junit \
+                        --reporter-junit-export results.xml
+                  timeout: 10m
+
+    # =========================================================================
+    # Stage 4: Deploy to Staging (Canary)
+    # =========================================================================
+    - stage:
+        name: Deploy to Staging (Canary)
+        identifier: deploy_staging
+        type: Deployment
+        spec:
+          deploymentType: Kubernetes
+          service:
+            serviceRef: <+pipeline.variables.service_name>
+          environment:
+            environmentRef: staging
+            infrastructureDefinitions:
+              - identifier: gke_staging
+          execution:
+            steps:
+              - step:
+                  type: K8sCanaryDeploy
+                  name: Canary Deploy (25%)
+                  identifier: canary_25
+                  spec:
+                    instanceSelection:
+                      type: Count
+                      spec:
+                        count: 1
+                    skipDryRun: false
+
+              - step:
+                  type: Verify
+                  name: Canary Verification
+                  identifier: canary_verify
+                  spec:
+                    type: Canary
+                    monitoredService:
+                      type: Default
+                    spec:
+                      sensitivity: HIGH
+                      duration: 5m
+                      deploymentTag: <+pipeline.sequenceId>
+                  timeout: 10m
+
+              - step:
+                  type: K8sCanaryDelete
+                  name: Canary Cleanup
+                  identifier: canary_cleanup
+                  spec: {}
+
+              - step:
+                  type: K8sRollingDeploy
+                  name: Full Rolling Deploy
+                  identifier: rolling_deploy_staging
+                  spec:
+                    skipDryRun: false
+
+            rollbackSteps:
+              - step:
+                  type: K8sCanaryDelete
+                  name: Canary Delete on Failure
+                  identifier: canary_delete_rollback
+                  spec: {}
+              - step:
+                  type: K8sRollingRollback
+                  name: Rollback Staging
+                  identifier: rollback_staging
+                  spec: {}
+
+    # =========================================================================
+    # Stage 5: Approval Gate
+    # =========================================================================
+    - stage:
+        name: Production Approval
+        identifier: prod_approval
+        type: Approval
+        spec:
+          execution:
+            steps:
+              - step:
+                  type: HarnessApproval
+                  name: Approve Production Deploy
+                  identifier: approve_prod
+                  spec:
+                    approvalMessage: |
+                      Approve deployment of <+pipeline.variables.service_name>
+                      Image: gcr.io/finflow-prod/<+pipeline.variables.service_name>:<+pipeline.sequenceId>
+                      Changes: <+codebase.commitSha>
+                    approvers:
+                      userGroups:
+                        - platform_leads
+                        - sre_team
+                      minimumCount: 2
+                    approverInputs:
+                      - name: risk_assessment
+                        defaultValue: "low"
+                    includePipelineExecutionHistory: true
+                  timeout: 4h
+
+    # =========================================================================
+    # Stage 6: Deploy to Production (Blue-Green)
+    # =========================================================================
+    - stage:
+        name: Deploy to Production
+        identifier: deploy_prod
+        type: Deployment
+        spec:
+          deploymentType: Kubernetes
+          service:
+            serviceRef: <+pipeline.variables.service_name>
+          environment:
+            environmentRef: production
+            infrastructureDefinitions:
+              - identifier: gke_prod
+              - identifier: eks_prod
+          execution:
+            steps:
+              - step:
+                  type: K8sBGSwapServices
+                  name: Blue-Green Deploy
+                  identifier: bg_deploy
+                  spec:
+                    skipDryRun: false
+
+              - step:
+                  type: Verify
+                  name: Production Verification
+                  identifier: prod_verify
+                  spec:
+                    type: Rolling
+                    monitoredService:
+                      type: Default
+                    spec:
+                      sensitivity: HIGH
+                      duration: 10m
+                  timeout: 15m
+
+            rollbackSteps:
+              - step:
+                  type: K8sBGSwapServices
+                  name: Swap Back
+                  identifier: bg_rollback
+                  spec: {}
+
+  variables:
+    - name: service_name
+      type: String
+      description: "Name of the service to deploy"
+      required: true
+      default: "transaction-api"
+    - name: target_environment
+      type: String
+      description: "Target environment"
+      required: true
+      default: "dev"

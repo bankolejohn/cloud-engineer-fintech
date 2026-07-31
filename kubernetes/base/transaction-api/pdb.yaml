@@ -1,0 +1,10 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: transaction-api
+  namespace: finflow
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: transaction-api

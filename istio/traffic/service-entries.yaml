@@ -1,0 +1,79 @@
+# ==============================================================================
+# Istio ServiceEntries - External service declarations
+# Required because outboundTrafficPolicy is REGISTRY_ONLY
+# ==============================================================================
+
+# Allow access to external payment gateways
+apiVersion: networking.istio.io/v1beta1
+kind: ServiceEntry
+metadata:
+  name: payment-gateway-external
+  namespace: finflow
+spec:
+  hosts:
+    - "api.paymentgateway.com"
+  ports:
+    - number: 443
+      name: https
+      protocol: HTTPS
+  location: MESH_EXTERNAL
+  resolution: DNS
+---
+# Allow access to notification providers (email, SMS)
+apiVersion: networking.istio.io/v1beta1
+kind: ServiceEntry
+metadata:
+  name: notification-providers
+  namespace: finflow
+spec:
+  hosts:
+    - "api.sendgrid.com"
+    - "api.twilio.com"
+    - "fcm.googleapis.com"
+  ports:
+    - number: 443
+      name: https
+      protocol: HTTPS
+  location: MESH_EXTERNAL
+  resolution: DNS
+---
+# Allow access to Cloud SQL (private IP)
+apiVersion: networking.istio.io/v1beta1
+kind: ServiceEntry
+metadata:
+  name: cloud-sql
+  namespace: finflow
+spec:
+  hosts:
+    - "finflow-mysql.internal"
+  addresses:
+    - "10.3.0.0/24"
+  ports:
+    - number: 3306
+      name: mysql
+      protocol: TCP
+  location: MESH_EXTERNAL
+  resolution: NONE
+---
+# Cross-cluster service entry (AWS EKS cluster)
+apiVersion: networking.istio.io/v1beta1
+kind: ServiceEntry
+metadata:
+  name: aws-cluster-services
+  namespace: finflow
+spec:
+  hosts:
+    - "*.finflow.svc.aws-cluster.local"
+  ports:
+    - number: 80
+      name: http
+      protocol: HTTP
+    - number: 443
+      name: https
+      protocol: HTTPS
+  location: MESH_INTERNAL
+  resolution: DNS
+  endpoints:
+    - address: "10.10.0.100"  # AWS cluster ingress gateway IP
+      ports:
+        http: 15443

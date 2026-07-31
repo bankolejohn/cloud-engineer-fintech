@@ -1,0 +1,97 @@
+# ==============================================================================
+# ArgoCD Project - FinFlow
+# Defines access controls and allowed resources for the platform
+# ==============================================================================
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: finflow
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  description: "FinFlow Platform - Multi-cloud financial transaction system"
+  
+  # Source repositories
+  sourceRepos:
+    - "https://github.com/finflow/finflow-platform.git"
+    - "https://charts.helm.sh/stable"
+    - "https://prometheus-community.github.io/helm-charts"
+    - "https://grafana.github.io/helm-charts"
+
+  # Allowed destination clusters and namespaces
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: finflow
+    - server: https://kubernetes.default.svc
+      namespace: finflow-kafka
+    - server: https://kubernetes.default.svc
+      namespace: finflow-monitoring
+    - server: https://kubernetes.default.svc
+      namespace: istio-system
+    # AWS secondary cluster
+    - server: https://eks-finflow-prod.us-east-1.eks.amazonaws.com
+      namespace: finflow
+    - server: https://eks-finflow-prod.us-east-1.eks.amazonaws.com
+      namespace: finflow-kafka
+
+  # Allowed Kubernetes resources
+  clusterResourceWhitelist:
+    - group: ""
+      kind: Namespace
+    - group: rbac.authorization.k8s.io
+      kind: ClusterRole
+    - group: rbac.authorization.k8s.io
+      kind: ClusterRoleBinding
+
+  namespaceResourceWhitelist:
+    - group: ""
+      kind: "*"
+    - group: apps
+      kind: "*"
+    - group: autoscaling
+      kind: "*"
+    - group: networking.k8s.io
+      kind: "*"
+    - group: policy
+      kind: "*"
+    - group: networking.istio.io
+      kind: "*"
+    - group: security.istio.io
+      kind: "*"
+    - group: kafka.strimzi.io
+      kind: "*"
+
+  # Roles for RBAC
+  roles:
+    - name: platform-admin
+      description: "Full access to FinFlow project"
+      policies:
+        - p, proj:finflow:platform-admin, applications, *, finflow/*, allow
+      groups:
+        - platform-team
+    
+    - name: developer
+      description: "Read-only with sync for non-prod"
+      policies:
+        - p, proj:finflow:developer, applications, get, finflow/*, allow
+        - p, proj:finflow:developer, applications, sync, finflow/*-dev, allow
+      groups:
+        - developers
+
+  # Sync windows (maintenance windows for prod)
+  syncWindows:
+    - kind: allow
+      schedule: "0 2-6 * * 1-5"  # Weekdays 2-6 AM UTC
+      duration: 4h
+      applications:
+        - "*-prod"
+      namespaces:
+        - finflow
+      clusters:
+        - "*"
+    - kind: deny
+      schedule: "0 0 * * 0"  # Deny all syncs on Sunday midnight
+      duration: 24h
+      applications:
+        - "*-prod"

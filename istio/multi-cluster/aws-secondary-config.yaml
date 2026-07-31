@@ -1,0 +1,141 @@
+# ==============================================================================
+# Istio Multi-Cluster Configuration - AWS Secondary Cluster
+# Joins the GCP primary cluster's mesh for cross-cluster routing
+# ==============================================================================
+
+# Istio installation for secondary cluster (shared control plane model)
+apiVersion: install.istio.io/v1alpha1
+kind: IstioOperator
+metadata:
+  name: finflow-istio-secondary
+  namespace: istio-system
+spec:
+  profile: default
+  
+  meshConfig:
+    accessLogFile: /dev/stdout
+    enableTracing: true
+    enableAutoMtls: true
+    trustDomain: finflow.io
+    defaultConfig:
+      tracing:
+        sampling: 100.0
+        zipkin:
+          address: jaeger-collector.finflow-monitoring.svc.cluster.local:9411
+      holdApplicationUntilProxyStarts: true
+    outboundTrafficPolicy:
+      mode: REGISTRY_ONLY
+
+  components:
+    ingressGateways:
+      - name: istio-ingressgateway
+        enabled: true
+        k8s:
+          service:
+            type: LoadBalancer
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+          hpaSpec:
+            minReplicas: 2
+            maxReplicas: 5
+    egressGateways:
+      - name: istio-egressgateway
+        enabled: true
+
+  values:
+    global:
+      meshID: finflow-mesh
+      multiCluster:
+        clusterName: aws-secondary
+      network: aws-network
+---
+# East-West Gateway for AWS cluster
+apiVersion: install.istio.io/v1alpha1
+kind: IstioOperator
+metadata:
+  name: eastwest-gateway-aws
+  namespace: istio-system
+spec:
+  profile: empty
+  components:
+    ingressGateways:
+      - name: istio-eastwestgateway
+        label:
+          istio: eastwestgateway
+          app: istio-eastwestgateway
+          topology.istio.io/network: aws-network
+        enabled: true
+        k8s:
+          env:
+            - name: ISTIO_META_REQUESTED_NETWORK_VIEW
+              value: aws-network
+          service:
+            ports:
+              - name: status-port
+                port: 15021
+                targetPort: 15021
+              - name: tls
+                port: 15443
+                targetPort: 15443
+              - name: tls-istiod
+                port: 15012
+                targetPort: 15012
+              - name: tls-webhook
+                port: 15017
+                targetPort: 15017
+  values:
+    global:
+      meshID: finflow-mesh
+      multiCluster:
+        clusterName: aws-secondary
+      network: aws-network
+---
+# Cross-cluster traffic routing: Failover from GCP to AWS
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: transaction-api-failover
+  namespace: finflow
+spec:
+  hosts:
+    - transaction-api
+  http:
+    - route:
+        - destination:
+            host: transaction-api
+            subset: v1
+          weight: 100
+      # If primary (GCP) is unavailable, traffic automatically routes to AWS
+      # via Istio's locality-aware load balancing
+---
+# Locality-aware load balancing (prefer local cluster, failover to remote)
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: transaction-api-locality
+  namespace: finflow
+spec:
+  host: transaction-api
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 100
+      http:
+        http2MaxRequests: 1000
+    outlierDetection:
+      consecutive5xxErrors: 5
+      interval: 10s
+      baseEjectionTime: 30s
+    loadBalancer:
+      localityLbSetting:
+        enabled: true
+        failover:
+          - from: us-central1  # GCP region
+            to: us-east-1      # AWS region
+      simple: ROUND_ROBIN
+  subsets:
+    - name: v1
+      labels:
+        version: v1

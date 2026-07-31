@@ -1,0 +1,47 @@
+# Values for transaction-api deployment
+nameOverride: "transaction-api"
+fullnameOverride: "transaction-api"
+
+replicaCount: 2
+
+image:
+  repository: gcr.io/finflow/transaction-api
+  tag: "v1.0.0"
+
+service:
+  port: 80
+  targetPort: 8080
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+env:
+  - name: PORT
+    value: "8080"
+  - name: SERVICE_NAME
+    value: "transaction-api"
+  - name: KAFKA_BOOTSTRAP_SERVERS
+    value: "finflow-kafka-bootstrap.finflow-kafka.svc.cluster.local:9092"
+
+vault:
+  enabled: true
+  role: "transaction-api"
+  secrets:
+    - name: db-creds
+      path: "database/creds/transaction-api"
+
+serviceAccount:
+  create: true
+  annotations:
+    iam.gke.io/gcp-service-account: finflow-transaction-api@PROJECT_ID.iam.gserviceaccount.com
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70

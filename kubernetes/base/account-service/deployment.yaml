@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: account-service
+  namespace: finflow
+  labels:
+    app: account-service
+    version: v1
+    app.kubernetes.io/name: account-service
+    app.kubernetes.io/part-of: finflow
+    app.kubernetes.io/component: accounts
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: account-service
+      version: v1
+  template:
+    metadata:
+      labels:
+        app: account-service
+        version: v1
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8082"
+        prometheus.io/path: "/metrics"
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/role: "account-service"
+        vault.hashicorp.com/agent-inject-secret-db-creds: "database/creds/account-service"
+    spec:
+      serviceAccountName: account-service
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+      containers:
+        - name: account-service
+          image: gcr.io/finflow/account-service:latest
+          ports:
+            - name: http
+              containerPort: 8082
+              protocol: TCP
+          env:
+            - name: PORT
+              value: "8082"
+            - name: SERVICE_NAME
+              value: "account-service"
+            - name: DB_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: finflow-db-credentials
+                  key: host
+          resources:
+            requests:
+              cpu: 150m
+              memory: 192Mi
+            limits:
+              cpu: 750m
+              memory: 384Mi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10

@@ -1,0 +1,167 @@
+# ==============================================================================
+# ArgoCD Application: Transaction API
+# GitOps-managed deployment with automated sync and progressive delivery
+# ==============================================================================
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: transaction-api-prod
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: transaction-api
+    app.kubernetes.io/part-of: finflow
+    environment: production
+  annotations:
+    # Notifications
+    notifications.argoproj.io/subscribe.on-sync-succeeded.slack: finflow-deployments
+    notifications.argoproj.io/subscribe.on-sync-failed.slack: finflow-alerts
+    notifications.argoproj.io/subscribe.on-health-degraded.slack: finflow-alerts
+spec:
+  project: finflow
+  
+  source:
+    repoURL: https://github.com/finflow/finflow-platform.git
+    targetRevision: main
+    path: kubernetes/overlays/prod
+    kustomize:
+      images:
+        - gcr.io/finflow/transaction-api:v1.0.0
+  
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: finflow
+  
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - PrunePropagationPolicy=foreground
+      - RespectIgnoreDifferences=true
+    retry:
+      limit: 3
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 2m
+  
+  # Ignore differences that are managed by controllers
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas  # Managed by HPA
+    - group: autoscaling
+      kind: HorizontalPodAutoscaler
+      jsonPointers:
+        - /status
+  
+  # Health checks
+  revisionHistoryLimit: 10
+---
+# Canary rollout using Argo Rollouts (progressive delivery)
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: transaction-api-canary
+  namespace: finflow
+  labels:
+    app: transaction-api
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: transaction-api
+  template:
+    metadata:
+      labels:
+        app: transaction-api
+        version: v1
+    spec:
+      containers:
+        - name: transaction-api
+          image: gcr.io/finflow/transaction-api:v1.0.0
+          ports:
+            - containerPort: 8080
+  strategy:
+    canary:
+      # Canary steps: gradually increase traffic
+      steps:
+        - setWeight: 10
+        - pause: { duration: 2m }
+        - setWeight: 25
+        - pause: { duration: 2m }
+        - setWeight: 50
+        - pause: { duration: 5m }
+        - setWeight: 75
+        - pause: { duration: 2m }
+        - setWeight: 100
+      
+      # Analysis template for automated verification
+      analysis:
+        templates:
+          - templateName: success-rate
+        startingStep: 2  # Start analysis at 25%
+        args:
+          - name: service-name
+            value: transaction-api
+      
+      # Traffic routing via Istio
+      trafficRouting:
+        istio:
+          virtualServices:
+            - name: transaction-api
+              routes:
+                - primary
+          destinationRule:
+            name: transaction-api
+            canarySubsetName: canary
+            stableSubsetName: stable
+      
+      # Anti-affinity for canary pods
+      antiAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+          weight: 100
+---
+# Analysis Template for canary verification
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: success-rate
+  namespace: finflow
+spec:
+  args:
+    - name: service-name
+  metrics:
+    - name: success-rate
+      interval: 1m
+      count: 5
+      successCondition: result[0] >= 0.95
+      failureLimit: 3
+      provider:
+        prometheus:
+          address: http://prometheus.finflow-monitoring.svc.cluster.local:9090
+          query: |
+            sum(rate(istio_requests_total{
+              destination_service_name="{{args.service-name}}",
+              response_code!~"5.*"
+            }[2m])) /
+            sum(rate(istio_requests_total{
+              destination_service_name="{{args.service-name}}"
+            }[2m]))
+    
+    - name: latency-p99
+      interval: 1m
+      count: 5
+      successCondition: result[0] <= 500
+      failureLimit: 3
+      provider:
+        prometheus:
+          address: http://prometheus.finflow-monitoring.svc.cluster.local:9090
+          query: |
+            histogram_quantile(0.99,
+              sum(rate(istio_request_duration_milliseconds_bucket{
+                destination_service_name="{{args.service-name}}"
+              }[2m])) by (le)
+            )

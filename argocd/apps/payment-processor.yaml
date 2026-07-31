@@ -1,0 +1,80 @@
+# ==============================================================================
+# ArgoCD Application: Payment Processor
+# ==============================================================================
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: payment-processor-prod
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: payment-processor
+    app.kubernetes.io/part-of: finflow
+    environment: production
+  annotations:
+    notifications.argoproj.io/subscribe.on-sync-succeeded.slack: finflow-deployments
+    notifications.argoproj.io/subscribe.on-sync-failed.slack: finflow-alerts
+spec:
+  project: finflow
+  source:
+    repoURL: https://github.com/finflow/finflow-platform.git
+    targetRevision: main
+    path: helm/charts/finflow-service
+    helm:
+      valueFiles:
+        - values-payment-processor.yaml
+      parameters:
+        - name: image.tag
+          value: v1.0.0
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: finflow
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+    retry:
+      limit: 3
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 2m
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas
+---
+# Multi-cluster deployment: AWS secondary
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: payment-processor-aws
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: payment-processor
+    app.kubernetes.io/part-of: finflow
+    environment: production
+    cluster: aws-secondary
+spec:
+  project: finflow
+  source:
+    repoURL: https://github.com/finflow/finflow-platform.git
+    targetRevision: main
+    path: helm/charts/finflow-service
+    helm:
+      valueFiles:
+        - values-payment-processor.yaml
+      parameters:
+        - name: image.tag
+          value: v1.0.0
+        - name: replicaCount
+          value: "2"
+  destination:
+    server: https://eks-finflow-prod.us-east-1.eks.amazonaws.com
+    namespace: finflow
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true

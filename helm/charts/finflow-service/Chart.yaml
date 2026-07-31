@@ -1,0 +1,13 @@
+apiVersion: v2
+name: finflow-service
+description: A generic Helm chart for FinFlow microservices
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+keywords:
+  - finflow
+  - microservice
+  - fintech
+maintainers:
+  - name: Platform Team
+    email: platform@finflow.io

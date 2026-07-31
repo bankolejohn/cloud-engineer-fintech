@@ -1,0 +1,50 @@
+# ==============================================================================
+# Jaeger - Distributed Tracing
+# Integrated with Istio for automatic trace collection
+# ==============================================================================
+apiVersion: jaegertracing.io/v1
+kind: Jaeger
+metadata:
+  name: finflow-jaeger
+  namespace: finflow-monitoring
+spec:
+  strategy: production
+  
+  collector:
+    replicas: 2
+    maxReplicas: 5
+    resources:
+      requests:
+        cpu: 200m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+    options:
+      collector:
+        zipkin:
+          host-port: ":9411"  # Istio sends traces here
+  
+  query:
+    replicas: 1
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+  
+  storage:
+    type: elasticsearch
+    options:
+      es:
+        server-urls: http://elasticsearch.finflow-monitoring.svc.cluster.local:9200
+        index-prefix: finflow-traces
+    esIndexCleaner:
+      enabled: true
+      numberOfDays: 14
+      schedule: "55 23 * * *"
+  
+  agent:
+    strategy: DaemonSet
+  
+  ingress:
+    enabled: false  # Access via port-forward or internal ingress

@@ -1,0 +1,50 @@
+# ==============================================================================
+# Istio Gateway - Entry point for external traffic
+# ==============================================================================
+apiVersion: networking.istio.io/v1beta1
+kind: Gateway
+metadata:
+  name: finflow-gateway
+  namespace: finflow
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+    - port:
+        number: 80
+        name: http
+        protocol: HTTP
+      hosts:
+        - "api.finflow.io"
+        - "*.finflow.io"
+      tls:
+        httpsRedirect: true  # Redirect HTTP to HTTPS
+    - port:
+        number: 443
+        name: https
+        protocol: HTTPS
+      hosts:
+        - "api.finflow.io"
+        - "*.finflow.io"
+      tls:
+        mode: SIMPLE
+        credentialName: finflow-tls-cert  # K8s secret with TLS cert
+---
+# Internal gateway for cross-cluster traffic
+apiVersion: networking.istio.io/v1beta1
+kind: Gateway
+metadata:
+  name: finflow-internal-gateway
+  namespace: finflow
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+    - port:
+        number: 15443
+        name: tls
+        protocol: TLS
+      hosts:
+        - "*.finflow.svc.cluster.local"
+      tls:
+        mode: AUTO_PASSTHROUGH

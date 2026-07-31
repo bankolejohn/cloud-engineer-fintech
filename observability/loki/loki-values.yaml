@@ -1,0 +1,46 @@
+# ==============================================================================
+# Loki - Log Aggregation (Helm Values)
+# Install: helm install loki grafana/loki-stack -f loki-values.yaml
+# ==============================================================================
+
+loki:
+  enabled: true
+  persistence:
+    enabled: true
+    size: 50Gi
+    storageClassName: ssd
+  config:
+    chunk_store_config:
+      max_look_back_period: 720h  # 30 days
+    table_manager:
+      retention_deletes_enabled: true
+      retention_period: 720h
+
+promtail:
+  enabled: true
+  config:
+    snippets:
+      pipelineStages:
+        - docker: {}
+        - json:
+            expressions:
+              level: level
+              msg: msg
+              service: service
+        - labels:
+            level:
+            service:
+      scrapeConfigs: |
+        - job_name: kubernetes-pods
+          kubernetes_sd_configs:
+            - role: pod
+          relabel_configs:
+            - source_labels: [__meta_kubernetes_pod_label_app]
+              target_label: app
+            - source_labels: [__meta_kubernetes_namespace]
+              target_label: namespace
+          pipeline_stages:
+            - docker: {}
+
+grafana:
+  enabled: false  # Use existing Grafana from kube-prometheus-stack

@@ -1,0 +1,56 @@
+# Values for fraud-detection deployment
+nameOverride: "fraud-detection"
+fullnameOverride: "fraud-detection"
+
+replicaCount: 2
+
+image:
+  repository: gcr.io/finflow/fraud-detection
+  tag: "v1.0.0"
+
+service:
+  port: 80
+  targetPort: 8083
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: "1"
+    memory: 512Mi
+
+env:
+  - name: PORT
+    value: "8083"
+  - name: SERVICE_NAME
+    value: "fraud-detection"
+  - name: FRAUD_THRESHOLD
+    value: "0.7"
+  - name: KAFKA_BOOTSTRAP_SERVERS
+    value: "finflow-kafka-bootstrap.finflow-kafka.svc.cluster.local:9092"
+
+livenessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 15
+  periodSeconds: 20
+
+readinessProbe:
+  httpGet:
+    path: /ready
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 10
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 8
+  targetCPUUtilizationPercentage: 70

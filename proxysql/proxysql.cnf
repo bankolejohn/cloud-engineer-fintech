@@ -1,0 +1,215 @@
+# ==============================================================================
+# ProxySQL Configuration - FinFlow Database Proxy
+# Read/write splitting, connection pooling, query routing, and failover
+# ==============================================================================
+
+datadir="/var/lib/proxysql"
+
+admin_variables=
+{
+    admin_credentials="admin:finflow-proxy-admin;radmin:finflow-radmin"
+    mysql_ifaces="0.0.0.0:6032"
+    restapi_enabled=true
+    restapi_port=6070
+    web_enabled=true
+    web_port=6080
+}
+
+mysql_variables=
+{
+    threads=8
+    max_connections=2048
+    default_query_delay=0
+    default_query_timeout=36000000
+    have_compress=true
+    poll_timeout=2000
+    interfaces="0.0.0.0:6033"
+    default_schema="finflow"
+    stacksize=1048576
+    server_version="8.0.35"
+    connect_timeout_server=3000
+    monitor_username="proxysql_monitor"
+    monitor_password="CHANGE_VIA_VAULT"
+    monitor_history=600000
+    monitor_connect_interval=60000
+    monitor_ping_interval=10000
+    monitor_read_only_interval=1500
+    monitor_read_only_timeout=500
+    ping_interval_server_msec=120000
+    ping_timeout_server=500
+    commands_stats=true
+    sessions_sort=true
+    connect_retries_on_failure=10
+    
+    # Connection multiplexing
+    multiplexing=true
+    connection_max_age_ms=0
+    
+    # Query cache (for read-heavy workloads)
+    query_cache_size_MB=256
+    
+    # SSL to backend
+    have_ssl=true
+}
+
+# ==============================================================================
+# MySQL Servers (Hostgroups)
+# HG 10 = Writer (Primary)
+# HG 20 = Reader (Replicas)
+# HG 30 = Offline (for maintenance)
+# ==============================================================================
+mysql_servers=
+(
+    # Primary (writer)
+    {
+        address="10.3.0.10"
+        port=3306
+        hostgroup=10
+        status="ONLINE"
+        weight=1000
+        max_connections=500
+        max_replication_lag=0
+        comment="GCP Cloud SQL Primary"
+    },
+    # Replica 1 (reader)
+    {
+        address="10.3.0.11"
+        port=3306
+        hostgroup=20
+        status="ONLINE"
+        weight=500
+        max_connections=500
+        max_replication_lag=5
+        comment="GCP Cloud SQL Replica 1"
+    },
+    # Replica 2 (reader - AWS cross-region)
+    {
+        address="10.10.200.10"
+        port=3306
+        hostgroup=20
+        status="ONLINE"
+        weight=300
+        max_connections=300
+        max_replication_lag=10
+        comment="AWS RDS Replica (cross-region)"
+    }
+)
+
+# ==============================================================================
+# MySQL Users
+# ==============================================================================
+mysql_users=
+(
+    {
+        username="finflow_app"
+        password="CHANGE_VIA_VAULT"
+        default_hostgroup=10
+        max_connections=200
+        default_schema="finflow"
+        active=1
+        transaction_persistent=1
+    },
+    {
+        username="finflow_readonly"
+        password="CHANGE_VIA_VAULT"
+        default_hostgroup=20
+        max_connections=300
+        default_schema="finflow"
+        active=1
+    }
+)
+
+# ==============================================================================
+# Query Rules - Read/Write Splitting & Routing
+# ==============================================================================
+mysql_query_rules=
+(
+    # Rule 1: Route SELECT FOR UPDATE to writer
+    {
+        rule_id=100
+        active=1
+        match_digest="^SELECT.*FOR UPDATE$"
+        destination_hostgroup=10
+        apply=1
+        comment="SELECT FOR UPDATE -> writer"
+    },
+    # Rule 2: Route all SELECT to readers
+    {
+        rule_id=200
+        active=1
+        match_digest="^SELECT"
+        destination_hostgroup=20
+        apply=1
+        comment="SELECT -> readers"
+    },
+    # Rule 3: Route INSERT/UPDATE/DELETE to writer
+    {
+        rule_id=300
+        active=1
+        match_digest="^(INSERT|UPDATE|DELETE|REPLACE)"
+        destination_hostgroup=10
+        apply=1
+        comment="Writes -> writer"
+    },
+    # Rule 4: Cache frequently accessed account balances (5 second TTL)
+    {
+        rule_id=400
+        active=1
+        match_digest="^SELECT.*FROM accounts WHERE id"
+        destination_hostgroup=20
+        cache_ttl=5000
+        apply=1
+        comment="Cache account lookups"
+    },
+    # Rule 5: Block dangerous queries
+    {
+        rule_id=500
+        active=1
+        match_digest="^(DROP|TRUNCATE|ALTER)"
+        error_msg="DDL operations blocked by ProxySQL. Use migration tool."
+        apply=1
+        comment="Block DDL from application"
+    },
+    # Rule 6: Rate limit specific expensive queries
+    {
+        rule_id=600
+        active=1
+        match_digest="^SELECT.*FROM transactions WHERE.*created_at"
+        max_lag_ms=5000
+        destination_hostgroup=20
+        delay=100
+        apply=1
+        comment="Slow down expensive date-range scans"
+    }
+)
+
+# ==============================================================================
+# Replication Hostgroups (automatic failover)
+# ==============================================================================
+mysql_replication_hostgroups=
+(
+    {
+        writer_hostgroup=10
+        reader_hostgroup=20
+        check_type="read_only"
+        comment="Primary/Replica split"
+    }
+)
+
+# ==============================================================================
+# Scheduler (health checks and auto-failover)
+# ==============================================================================
+scheduler=
+(
+    {
+        id=1
+        active=1
+        interval_ms=5000
+        filename="/usr/share/proxysql/tools/proxysql_galera_checker.sh"
+        arg1="10"
+        arg2="20"
+        arg3="1"
+        arg4="1"
+        comment="Replication health checker"
+    }
+)

@@ -1,0 +1,319 @@
+// ==============================================================================
+// FinFlow Platform - Multi-Service CI Pipeline (Declarative)
+// Builds, tests, scans, and publishes container images
+// ==============================================================================
+
+@Library('finflow-shared-library') _
+
+pipeline {
+    agent {
+        kubernetes {
+            label 'finflow-builder'
+            yaml """
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    jenkins: agent
+spec:
+  serviceAccountName: jenkins-agent
+  containers:
+    - name: golang
+      image: golang:1.21-alpine
+      command: ['cat']
+      tty: true
+      resources:
+        requests:
+          cpu: 500m
+          memory: 512Mi
+    - name: python
+      image: python:3.11-slim
+      command: ['cat']
+      tty: true
+    - name: docker
+      image: docker:24-dind
+      securityContext:
+        privileged: true
+      volumeMounts:
+        - name: docker-socket
+          mountPath: /var/run/docker.sock
+    - name: trivy
+      image: aquasec/trivy:latest
+      command: ['cat']
+      tty: true
+    - name: terraform
+      image: hashicorp/terraform:1.5
+      command: ['cat']
+      tty: true
+    - name: kubectl
+      image: bitnami/kubectl:1.28
+      command: ['cat']
+      tty: true
+  volumes:
+    - name: docker-socket
+      hostPath:
+        path: /var/run/docker.sock
+"""
+        }
+    }
+
+    environment {
+        REGISTRY = 'gcr.io/finflow-prod'
+        GIT_COMMIT_SHORT = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
+        IMAGE_TAG = "${env.BRANCH_NAME}-${GIT_COMMIT_SHORT}-${env.BUILD_NUMBER}"
+        SONAR_HOST = credentials('sonarqube-url')
+        SONAR_TOKEN = credentials('sonarqube-token')
+    }
+
+    options {
+        timeout(time: 30, unit: 'MINUTES')
+        disableConcurrentBuilds()
+        buildDiscarder(logRotator(numToKeepStr: '20'))
+        timestamps()
+    }
+
+    stages {
+        stage('Detect Changes') {
+            steps {
+                script {
+                    env.CHANGED_SERVICES = detectChangedServices()
+                    echo "Changed services: ${env.CHANGED_SERVICES}"
+                }
+            }
+        }
+
+        stage('Build & Test') {
+            parallel {
+                stage('Go Services') {
+                    when {
+                        expression { 
+                            env.CHANGED_SERVICES.contains('transaction-api') || 
+                            env.CHANGED_SERVICES.contains('payment-processor') ||
+                            env.CHANGED_SERVICES.contains('account-service')
+                        }
+                    }
+                    steps {
+                        container('golang') {
+                            script {
+                                def goServices = ['transaction-api', 'payment-processor', 'account-service']
+                                goServices.each { svc ->
+                                    if (env.CHANGED_SERVICES.contains(svc)) {
+                                        dir("services/${svc}") {
+                                            sh '''
+                                                go mod download
+                                                go vet ./...
+                                                go test -v -race -coverprofile=coverage.out ./...
+                                                go build -ldflags="-w -s" -o /tmp/${svc} .
+                                            '''
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                stage('Python Services') {
+                    when {
+                        expression {
+                            env.CHANGED_SERVICES.contains('fraud-detection') ||
+                            env.CHANGED_SERVICES.contains('notification-service')
+                        }
+                    }
+                    steps {
+                        container('python') {
+                            script {
+                                def pyServices = ['fraud-detection', 'notification-service']
+                                pyServices.each { svc ->
+                                    if (env.CHANGED_SERVICES.contains(svc)) {
+                                        dir("services/${svc}") {
+                                            sh '''
+                                                pip install -r requirements.txt
+                                                pip install pytest flake8 bandit safety
+                                                flake8 --max-line-length=120 .
+                                                bandit -r . -ll
+                                                safety check -r requirements.txt
+                                                pytest tests/ -v --cov=. --cov-report=xml || true
+                                            '''
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                stage('Terraform Validate') {
+                    when {
+                        changeset "terraform/**"
+                    }
+                    steps {
+                        container('terraform') {
+                            dir('terraform/environments/dev') {
+                                sh '''
+                                    terraform init -backend=false
+                                    terraform validate
+                                    terraform fmt -check -recursive ../../
+                                '''
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('SAST - SonarQube') {
+            when {
+                branch pattern: "main|develop|feature/*", comparator: "GLOB"
+            }
+            steps {
+                script {
+                    withSonarQubeEnv('SonarQube') {
+                        sh """
+                            sonar-scanner \
+                                -Dsonar.projectKey=finflow-platform \
+                                -Dsonar.sources=services/ \
+                                -Dsonar.host.url=${SONAR_HOST} \
+                                -Dsonar.token=${SONAR_TOKEN}
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Build Images') {
+            when {
+                branch pattern: "main|develop|release/*", comparator: "GLOB"
+            }
+            steps {
+                container('docker') {
+                    script {
+                        def services = env.CHANGED_SERVICES.split(',')
+                        services.each { svc ->
+                            svc = svc.trim()
+                            if (svc) {
+                                echo "Building image for ${svc}"
+                                sh """
+                                    docker build \
+                                        -f docker/${svc}.Dockerfile \
+                                        -t ${REGISTRY}/${svc}:${IMAGE_TAG} \
+                                        -t ${REGISTRY}/${svc}:latest \
+                                        --label "git.commit=${GIT_COMMIT_SHORT}" \
+                                        --label "build.number=${BUILD_NUMBER}" \
+                                        .
+                                """
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Container Security Scan') {
+            when {
+                branch pattern: "main|develop|release/*", comparator: "GLOB"
+            }
+            steps {
+                container('trivy') {
+                    script {
+                        def services = env.CHANGED_SERVICES.split(',')
+                        services.each { svc ->
+                            svc = svc.trim()
+                            if (svc) {
+                                sh """
+                                    trivy image \
+                                        --severity HIGH,CRITICAL \
+                                        --exit-code 1 \
+                                        --ignore-unfixed \
+                                        --format table \
+                                        ${REGISTRY}/${svc}:${IMAGE_TAG}
+                                """
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Push Images') {
+            when {
+                branch pattern: "main|release/*", comparator: "GLOB"
+            }
+            steps {
+                container('docker') {
+                    withCredentials([file(credentialsId: 'gcr-service-account', variable: 'GCR_KEY')]) {
+                        sh 'cat $GCR_KEY | docker login -u _json_key --password-stdin https://gcr.io'
+                        script {
+                            def services = env.CHANGED_SERVICES.split(',')
+                            services.each { svc ->
+                                svc = svc.trim()
+                                if (svc) {
+                                    sh """
+                                        docker push ${REGISTRY}/${svc}:${IMAGE_TAG}
+                                        docker push ${REGISTRY}/${svc}:latest
+                                    """
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Update GitOps Manifests') {
+            when {
+                branch 'main'
+            }
+            steps {
+                container('kubectl') {
+                    withCredentials([usernamePassword(credentialsId: 'github-token', usernameVariable: 'GIT_USER', passwordVariable: 'GIT_TOKEN')]) {
+                        script {
+                            def services = env.CHANGED_SERVICES.split(',')
+                            services.each { svc ->
+                                svc = svc.trim()
+                                if (svc) {
+                                    // Update image tag in kustomization
+                                    sh """
+                                        cd kubernetes/overlays/prod
+                                        kustomize edit set image gcr.io/finflow/${svc}=${REGISTRY}/${svc}:${IMAGE_TAG}
+                                    """
+                                }
+                            }
+                            sh """
+                                git config user.email "jenkins@finflow.io"
+                                git config user.name "Jenkins CI"
+                                git add kubernetes/overlays/
+                                git commit -m "ci: update image tags to ${IMAGE_TAG}" || true
+                                git push https://${GIT_USER}:${GIT_TOKEN}@github.com/finflow/finflow-platform.git HEAD:main
+                            """
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            publishHTML(target: [
+                reportDir: 'services/transaction-api',
+                reportFiles: 'coverage.out',
+                reportName: 'Coverage Report'
+            ])
+        }
+        success {
+            slackSend(
+                channel: '#finflow-deployments',
+                color: 'good',
+                message: "BUILD SUCCESS: ${env.JOB_NAME} #${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)"
+            )
+        }
+        failure {
+            slackSend(
+                channel: '#finflow-deployments',
+                color: 'danger',
+                message: "BUILD FAILED: ${env.JOB_NAME} #${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)"
+            )
+        }
+    }
+}

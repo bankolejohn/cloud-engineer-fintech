@@ -1,0 +1,128 @@
+# ==============================================================================
+# Kafka Users - ACL-based access control per service
+# ==============================================================================
+
+# Transaction API - Produces to transactions.created
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaUser
+metadata:
+  name: transaction-api
+  namespace: finflow-kafka
+  labels:
+    strimzi.io/cluster: finflow-kafka
+spec:
+  authentication:
+    type: tls
+  authorization:
+    type: simple
+    acls:
+      - resource:
+          type: topic
+          name: transactions.created
+          patternType: literal
+        operations: [Write, Describe]
+      - resource:
+          type: topic
+          name: transactions.status
+          patternType: literal
+        operations: [Read, Write, Describe]
+      - resource:
+          type: group
+          name: transaction-api
+          patternType: prefix
+        operations: [Read]
+---
+# Payment Processor - Consumes from transactions.created, produces to transactions.processed
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaUser
+metadata:
+  name: payment-processor
+  namespace: finflow-kafka
+  labels:
+    strimzi.io/cluster: finflow-kafka
+spec:
+  authentication:
+    type: tls
+  authorization:
+    type: simple
+    acls:
+      - resource:
+          type: topic
+          name: transactions.created
+          patternType: literal
+        operations: [Read, Describe]
+      - resource:
+          type: topic
+          name: transactions.processed
+          patternType: literal
+        operations: [Write, Describe]
+      - resource:
+          type: topic
+          name: notifications.outbound
+          patternType: literal
+        operations: [Write, Describe]
+      - resource:
+          type: group
+          name: payment-processor
+          patternType: prefix
+        operations: [Read]
+---
+# Fraud Detection - Consumes transactions, produces fraud scores
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaUser
+metadata:
+  name: fraud-detection
+  namespace: finflow-kafka
+  labels:
+    strimzi.io/cluster: finflow-kafka
+spec:
+  authentication:
+    type: tls
+  authorization:
+    type: simple
+    acls:
+      - resource:
+          type: topic
+          name: transactions.created
+          patternType: literal
+        operations: [Read, Describe]
+      - resource:
+          type: topic
+          name: transactions.fraud-scored
+          patternType: literal
+        operations: [Write, Describe]
+      - resource:
+          type: group
+          name: fraud-detection
+          patternType: prefix
+        operations: [Read]
+---
+# Notification Service - Consumes notification events
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaUser
+metadata:
+  name: notification-service
+  namespace: finflow-kafka
+  labels:
+    strimzi.io/cluster: finflow-kafka
+spec:
+  authentication:
+    type: tls
+  authorization:
+    type: simple
+    acls:
+      - resource:
+          type: topic
+          name: notifications.outbound
+          patternType: literal
+        operations: [Read, Describe]
+      - resource:
+          type: topic
+          name: notifications.delivery-status
+          patternType: literal
+        operations: [Write, Describe]
+      - resource:
+          type: group
+          name: notification-service
+          patternType: prefix
+        operations: [Read]

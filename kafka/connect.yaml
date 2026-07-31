@@ -1,0 +1,174 @@
+# ==============================================================================
+# Kafka Connect Cluster with Debezium CDC and S3 Sink
+# ==============================================================================
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaConnect
+metadata:
+  name: finflow-connect
+  namespace: finflow-kafka
+  labels:
+    app.kubernetes.io/part-of: finflow
+  annotations:
+    strimzi.io/use-connector-resources: "true"
+spec:
+  version: 3.6.1
+  replicas: 2
+  bootstrapServers: finflow-kafka-kafka-bootstrap:9092
+  
+  config:
+    group.id: finflow-connect-cluster
+    offset.storage.topic: connect-offsets
+    config.storage.topic: connect-configs
+    status.storage.topic: connect-status
+    offset.storage.replication.factor: 3
+    config.storage.replication.factor: 3
+    status.storage.replication.factor: 3
+    key.converter: org.apache.kafka.connect.json.JsonConverter
+    value.converter: org.apache.kafka.connect.json.JsonConverter
+    key.converter.schemas.enable: true
+    value.converter.schemas.enable: true
+    # Exactly-once semantics
+    exactly.once.source.support: enabled
+
+  build:
+    output:
+      type: docker
+      image: gcr.io/finflow-prod/kafka-connect:latest
+      pushSecret: gcr-credentials
+    plugins:
+      # Debezium MySQL connector (CDC)
+      - name: debezium-mysql
+        artifacts:
+          - type: tgz
+            url: https://repo1.maven.org/maven2/io/debezium/debezium-connector-mysql/2.4.1.Final/debezium-connector-mysql-2.4.1.Final-plugin.tar.gz
+      # S3 Sink connector (data lake)
+      - name: kafka-connect-s3
+        artifacts:
+          - type: zip
+            url: https://d1i4a15mxbxib1.cloudfront.net/api/plugins/confluentinc/kafka-connect-s3/versions/10.5.7/confluentinc-kafka-connect-s3-10.5.7.zip
+      # JDBC Sink connector
+      - name: kafka-connect-jdbc
+        artifacts:
+          - type: zip
+            url: https://d1i4a15mxbxib1.cloudfront.net/api/plugins/confluentinc/kafka-connect-jdbc/versions/10.7.4/confluentinc-kafka-connect-jdbc-10.7.4.zip
+
+  resources:
+    requests:
+      memory: 1Gi
+      cpu: 500m
+    limits:
+      memory: 2Gi
+      cpu: "1"
+
+  metricsConfig:
+    type: jmxPrometheusExporter
+    valueFrom:
+      configMapKeyRef:
+        name: kafka-metrics-config
+        key: connect-metrics-config.yml
+
+  template:
+    pod:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    strimzi.io/cluster: finflow-connect
+                topologyKey: topology.kubernetes.io/zone
+---
+# ==============================================================================
+# Debezium MySQL CDC Connector
+# Captures all changes from MySQL transactions table
+# ==============================================================================
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaConnector
+metadata:
+  name: mysql-cdc-transactions
+  namespace: finflow-kafka
+  labels:
+    strimzi.io/cluster: finflow-connect
+spec:
+  class: io.debezium.connector.mysql.MySqlConnector
+  tasksMax: 1
+  config:
+    # Connection
+    database.hostname: "${file:/opt/kafka/external-configuration/db-credentials/host}"
+    database.port: 3306
+    database.user: "${file:/opt/kafka/external-configuration/db-credentials/username}"
+    database.password: "${file:/opt/kafka/external-configuration/db-credentials/password}"
+    database.server.id: 1001
+    
+    # What to capture
+    topic.prefix: cdc.finflow
+    database.include.list: finflow
+    table.include.list: finflow.transactions,finflow.accounts
+    
+    # Schema history
+    schema.history.internal.kafka.bootstrap.servers: finflow-kafka-kafka-bootstrap:9092
+    schema.history.internal.kafka.topic: schema-changes.finflow
+    
+    # Snapshot mode
+    snapshot.mode: initial
+    
+    # Transforms
+    transforms: unwrap
+    transforms.unwrap.type: io.debezium.transforms.ExtractNewRecordState
+    transforms.unwrap.drop.tombstones: false
+    transforms.unwrap.delete.handling.mode: rewrite
+    
+    # Error handling
+    errors.tolerance: all
+    errors.deadletterqueue.topic.name: finflow.dlq
+    errors.deadletterqueue.topic.replication.factor: 3
+    errors.deadletterqueue.context.headers.enable: true
+    
+    # Heartbeat (keep connector alive during low-traffic periods)
+    heartbeat.interval.ms: 10000
+---
+# ==============================================================================
+# S3 Sink Connector - Archive transactions to data lake
+# ==============================================================================
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaConnector
+metadata:
+  name: s3-sink-transactions
+  namespace: finflow-kafka
+  labels:
+    strimzi.io/cluster: finflow-connect
+spec:
+  class: io.confluent.connect.s3.S3SinkConnector
+  tasksMax: 3
+  config:
+    # S3 configuration
+    s3.bucket.name: finflow-data-lake
+    s3.region: us-east-1
+    topics.dir: raw/kafka
+    
+    # Topics to sink
+    topics: transactions.created,transactions.processed,transactions.fraud-scored
+    
+    # Format
+    format.class: io.confluent.connect.s3.format.json.JsonFormat
+    storage.class: io.confluent.connect.s3.storage.S3Storage
+    
+    # Partitioning (by date for efficient querying)
+    partitioner.class: io.confluent.connect.storage.partitioner.TimeBasedPartitioner
+    path.format: "'year'=YYYY/'month'=MM/'day'=dd/'hour'=HH"
+    locale: en-US
+    timezone: UTC
+    partition.duration.ms: 3600000  # 1 hour
+    
+    # Flush settings
+    flush.size: 10000        # Flush every 10k records
+    rotate.interval.ms: 600000  # Or every 10 minutes
+    
+    # Schema
+    value.converter: org.apache.kafka.connect.json.JsonConverter
+    value.converter.schemas.enable: false
+    
+    # Error handling
+    errors.tolerance: all
+    errors.deadletterqueue.topic.name: finflow.dlq

@@ -1,0 +1,105 @@
+# ==============================================================================
+# ArgoCD Applications: Shared Infrastructure Components
+# Manages Kafka, monitoring, and Istio configs via GitOps
+# ==============================================================================
+
+# Kafka cluster managed by ArgoCD
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kafka-cluster
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: finflow
+    component: infrastructure
+spec:
+  project: finflow
+  source:
+    repoURL: https://github.com/finflow/finflow-platform.git
+    targetRevision: main
+    path: kafka
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: finflow-kafka
+  syncPolicy:
+    automated:
+      prune: false  # Don't auto-delete Kafka resources
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+---
+# Observability stack
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: observability-stack
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: finflow
+    component: infrastructure
+spec:
+  project: finflow
+  source:
+    repoURL: https://github.com/finflow/finflow-platform.git
+    targetRevision: main
+    path: observability
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: finflow-monitoring
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+---
+# Istio configuration
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: istio-config
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: finflow
+    component: infrastructure
+spec:
+  project: finflow
+  source:
+    repoURL: https://github.com/finflow/finflow-platform.git
+    targetRevision: main
+    path: istio
+    directory:
+      recurse: true
+      exclude: "multi-cluster/setup.sh"
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: finflow
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+---
+# Vault configuration
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: vault-config
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: finflow
+    component: infrastructure
+spec:
+  project: finflow
+  source:
+    repoURL: https://github.com/finflow/finflow-platform.git
+    targetRevision: main
+    path: vault/kubernetes
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: vault
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

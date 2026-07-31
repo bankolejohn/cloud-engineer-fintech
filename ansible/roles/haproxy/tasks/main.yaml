@@ -1,0 +1,69 @@
+# ==============================================================================
+# HAProxy Role - Install and configure HAProxy
+# ==============================================================================
+---
+- name: Install HAProxy
+  apt:
+    name: haproxy=2.8.*
+    state: present
+
+- name: Deploy HAProxy configuration
+  template:
+    src: haproxy.cfg.j2
+    dest: /etc/haproxy/haproxy.cfg
+    owner: root
+    group: root
+    mode: '0644'
+    validate: "haproxy -c -f %s"
+  notify: reload haproxy
+
+- name: Create HAProxy error pages directory
+  file:
+    path: /etc/haproxy/errors
+    state: directory
+    mode: '0755'
+
+- name: Create SSL certificate directory
+  file:
+    path: /etc/haproxy/certs
+    state: directory
+    owner: haproxy
+    group: haproxy
+    mode: '0700'
+
+- name: Deploy TLS certificate
+  copy:
+    content: "{{ vault_tls_certificate }}"
+    dest: /etc/haproxy/certs/finflow.pem
+    owner: haproxy
+    group: haproxy
+    mode: '0600'
+  notify: reload haproxy
+  when: vault_tls_certificate is defined
+
+- name: Enable HAProxy service
+  service:
+    name: haproxy
+    state: started
+    enabled: yes
+
+- name: Configure rsyslog for HAProxy logging
+  copy:
+    content: |
+      $AddUnixListenSocket /dev/log
+      if $programname startswith 'haproxy' then /var/log/haproxy.log
+      &stop
+    dest: /etc/rsyslog.d/49-haproxy.conf
+    mode: '0644'
+  notify: restart rsyslog
+
+handlers:
+  - name: reload haproxy
+    service:
+      name: haproxy
+      state: reloaded
+
+  - name: restart rsyslog
+    service:
+      name: rsyslog
+      state: restarted

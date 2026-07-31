@@ -1,0 +1,48 @@
+# ==============================================================================
+# Istio PeerAuthentication - Mutual TLS configuration
+# ==============================================================================
+
+# Mesh-wide strict mTLS (all traffic must be mTLS)
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: istio-system
+spec:
+  mtls:
+    mode: STRICT
+---
+# Namespace-level mTLS for finflow namespace
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: finflow-mtls
+  namespace: finflow
+spec:
+  mtls:
+    mode: STRICT
+---
+# Allow plaintext for Prometheus scraping on specific port
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: allow-prometheus-scrape
+  namespace: finflow
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/part-of: finflow
+  mtls:
+    mode: STRICT
+  portLevelMtls:
+    # Prometheus metrics port - allow permissive for scraping
+    8080:
+      mode: PERMISSIVE
+    8081:
+      mode: PERMISSIVE
+    8082:
+      mode: PERMISSIVE
+    8083:
+      mode: PERMISSIVE
+    8084:
+      mode: PERMISSIVE

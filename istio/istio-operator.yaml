@@ -1,0 +1,125 @@
+# ==============================================================================
+# Istio Operator Configuration
+# Production-grade Istio installation with custom settings
+# ==============================================================================
+apiVersion: install.istio.io/v1alpha1
+kind: IstioOperator
+metadata:
+  name: finflow-istio
+  namespace: istio-system
+spec:
+  profile: default
+  
+  meshConfig:
+    # Enable access logging
+    accessLogFile: /dev/stdout
+    accessLogFormat: |
+      [%START_TIME%] "%REQ(:METHOD)% %REQ(X-ENVOY-ORIGINAL-PATH?:PATH)% %PROTOCOL%"
+      %RESPONSE_CODE% %RESPONSE_FLAGS% %BYTES_RECEIVED% %BYTES_SENT%
+      %DURATION% %RESP(X-ENVOY-UPSTREAM-SERVICE-TIME)% "%REQ(X-FORWARDED-FOR)%"
+      "%REQ(USER-AGENT)%" "%REQ(X-REQUEST-ID)%" "%REQ(:AUTHORITY)%"
+      "%UPSTREAM_HOST%" %UPSTREAM_CLUSTER% %UPSTREAM_LOCAL_ADDRESS%
+    
+    # Enable distributed tracing
+    enableTracing: true
+    defaultConfig:
+      tracing:
+        sampling: 100.0  # 100% in dev, reduce in prod
+        zipkin:
+          address: jaeger-collector.finflow-monitoring.svc.cluster.local:9411
+      
+      # Proxy resource limits
+      concurrency: 2
+      
+      # Hold application start until proxy is ready
+      holdApplicationUntilProxyStarts: true
+    
+    # Outbound traffic policy (REGISTRY_ONLY = strict, only declared services)
+    outboundTrafficPolicy:
+      mode: REGISTRY_ONLY
+    
+    # Enable automatic mutual TLS
+    enableAutoMtls: true
+    
+    # Trust domain for multi-cluster
+    trustDomain: finflow.io
+
+  components:
+    # Ingress Gateway
+    ingressGateways:
+      - name: istio-ingressgateway
+        enabled: true
+        k8s:
+          service:
+            type: LoadBalancer
+            ports:
+              - name: http2
+                port: 80
+                targetPort: 8080
+              - name: https
+                port: 443
+                targetPort: 8443
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          hpaSpec:
+            minReplicas: 2
+            maxReplicas: 5
+            metrics:
+              - type: Resource
+                resource:
+                  name: cpu
+                  targetAverageUtilization: 70
+    
+    # Egress Gateway (controls outbound traffic)
+    egressGateways:
+      - name: istio-egressgateway
+        enabled: true
+        k8s:
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+
+    # Pilot (control plane)
+    pilot:
+      k8s:
+        resources:
+          requests:
+            cpu: 200m
+            memory: 256Mi
+          limits:
+            cpu: "1"
+            memory: 1Gi
+        hpaSpec:
+          minReplicas: 2
+          maxReplicas: 5
+
+  values:
+    global:
+      # Multi-cluster mesh ID
+      meshID: finflow-mesh
+      multiCluster:
+        clusterName: gcp-primary
+      network: gcp-network
+      
+      # Proxy settings
+      proxy:
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
+    
+    pilot:
+      autoscaleEnabled: true
+      traceSampling: 100.0
