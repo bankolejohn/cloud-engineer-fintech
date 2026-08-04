@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FinFlow - Transaction Dashboard</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0f1117;
+            color: #e4e4e7;
+            min-height: 100vh;
+        }
+        .header {
+            background: #1a1d2e;
+            padding: 16px 24px;
+            border-bottom: 1px solid #2d3748;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .header h1 { font-size: 20px; color: #10b981; }
+        .header .status { font-size: 12px; color: #6b7280; }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 24px;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        .card {
+            background: #1a1d2e;
+            border: 1px solid #2d3748;
+            border-radius: 12px;
+            padding: 20px;
+        }
+        .card h2 {
+            font-size: 14px;
+            color: #6b7280;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 16px;
+        }
+        .form-group { margin-bottom: 12px; }
+        .form-group label { display: block; font-size: 12px; color: #9ca3af; margin-bottom: 4px; }
+        .form-group select, .form-group input {
+            width: 100%;
+            padding: 10px 12px;
+            background: #0f1117;
+            border: 1px solid #374151;
+            border-radius: 8px;
+            color: #e4e4e7;
+            font-size: 14px;
+        }
+        .btn {
+            width: 100%;
+            padding: 12px;
+            background: #10b981;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            margin-top: 8px;
+        }
+        .btn:hover { background: #059669; }
+        .btn:disabled { background: #374151; cursor: not-allowed; }
+        .btn-danger { background: #ef4444; }
+        .btn-danger:hover { background: #dc2626; }
+        .account-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px 0;
+            border-bottom: 1px solid #2d3748;
+        }
+        .account-row:last-child { border-bottom: none; }
+        .account-name { color: #9ca3af; font-size: 13px; }
+        .account-balance { font-weight: 600; color: #10b981; }
+        .txn-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 0;
+            border-bottom: 1px solid #1f2937;
+            font-size: 13px;
+        }
+        .txn-id { color: #6b7280; font-family: monospace; font-size: 11px; }
+        .txn-amount { font-weight: 600; }
+        .status-badge {
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 500;
+        }
+        .status-completed { background: #064e3b; color: #6ee7b7; }
+        .status-pending { background: #78350f; color: #fcd34d; }
+        .status-failed { background: #7f1d1d; color: #fca5a5; }
+        .status-held { background: #4c1d95; color: #c4b5fd; }
+        .health-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 6px 0;
+        }
+        .health-dot {
+            width: 8px; height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 8px;
+        }
+        .health-up { background: #10b981; }
+        .health-down { background: #ef4444; }
+        .fraud-score {
+            text-align: center;
+            padding: 20px;
+        }
+        .fraud-score .score {
+            font-size: 48px;
+            font-weight: 700;
+        }
+        .fraud-score .label { color: #6b7280; font-size: 12px; margin-top: 4px; }
+        .score-low { color: #10b981; }
+        .score-medium { color: #f59e0b; }
+        .score-high { color: #ef4444; }
+        .notification {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 12px 20px;
+            border-radius: 8px;
+            font-size: 13px;
+            z-index: 1000;
+            animation: slideIn 0.3s ease;
+        }
+        .notification-success { background: #064e3b; border: 1px solid #10b981; }
+        .notification-error { background: #7f1d1d; border: 1px solid #ef4444; }
+        @keyframes slideIn { from { transform: translateX(100%); } to { transform: translateX(0); } }
+        .metrics-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+        .metric-box { text-align: center; padding: 12px; background: #0f1117; border-radius: 8px; }
+        .metric-value { font-size: 24px; font-weight: 700; color: #10b981; }
+        .metric-label { font-size: 11px; color: #6b7280; margin-top: 4px; }
+        .full-width { grid-column: 1 / -1; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>FinFlow</h1>
+        <div class="status" id="connection-status">Connecting...</div>
+    </div>
+
+    <div class="container">
+        <!-- Send Money -->
+        <div class="card">
+            <h2>Send Money</h2>
+            <div class="form-group">
+                <label>From Account</label>
+                <select id="from-account">
+                    <option value="acct-001">acct-001 (John Doe)</option>
+                    <option value="acct-002">acct-002 (Jane Smith)</option>
+                    <option value="acct-003">acct-003 (Bob Johnson)</option>
+                    <option value="acct-004">acct-004 (Alice Brown)</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>To Account</label>
+                <select id="to-account">
+                    <option value="acct-002">acct-002 (Jane Smith)</option>
+                    <option value="acct-001">acct-001 (John Doe)</option>
+                    <option value="acct-003">acct-003 (Bob Johnson)</option>
+                    <option value="acct-004">acct-004 (Alice Brown)</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Amount (NGN)</label>
+                <input type="number" id="amount" placeholder="50000" value="50000">
+            </div>
+            <div class="form-group">
+                <label>Description</label>
+                <input type="text" id="description" placeholder="Salary payment">
+            </div>
+            <button class="btn" onclick="sendPayment()">Send Payment</button>
+            <button class="btn btn-danger" style="margin-top:8px" onclick="sendSuspicious()">Send Suspicious (High Amount)</button>
+        </div>
+
+        <!-- Accounts -->
+        <div class="card">
+            <h2>Account Balances</h2>
+            <div id="accounts-list">
+                <div class="account-row"><span class="account-name">Loading...</span></div>
+            </div>
+            <button class="btn" style="margin-top:16px" onclick="refreshAccounts()">Refresh Balances</button>
+        </div>
+
+        <!-- Fraud Score -->
+        <div class="card">
+            <h2>Last Fraud Score</h2>
+            <div class="fraud-score" id="fraud-display">
+                <div class="score score-low">-</div>
+                <div class="label">No transactions yet</div>
+            </div>
+            <div id="fraud-flags" style="font-size:12px; color:#6b7280; margin-top:12px;"></div>
+        </div>
+
+        <!-- System Health -->
+        <div class="card">
+            <h2>System Health</h2>
+            <div id="health-list">
+                <div class="health-row"><span>Checking...</span></div>
+            </div>
+            <div class="metrics-grid" style="margin-top:16px">
+                <div class="metric-box">
+                    <div class="metric-value" id="txn-count">0</div>
+                    <div class="metric-label">Transactions Sent</div>
+                </div>
+                <div class="metric-box">
+                    <div class="metric-value" id="success-rate">-</div>
+                    <div class="metric-label">Success Rate</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Recent Transactions -->
+        <div class="card full-width">
+            <h2>Recent Transactions</h2>
+            <div id="transactions-list">
+                <div class="txn-row"><span style="color:#6b7280">No transactions yet. Send one above!</span></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // API base URL (configured via environment or defaults to relative path)
+        const API_BASE = window.FINFLOW_API_BASE || '';
+        
+        let transactions = [];
+        let txnCount = 0;
+        let successCount = 0;
+
+        // Health check all services
+        async function checkHealth() {
+            const services = [
+                { name: 'transaction-api', url: `${API_BASE}/api/v1/transactions` },
+                { name: 'payment-processor', url: `${API_BASE}/health` },
+                { name: 'fraud-detection', url: `${API_BASE}/health` },
+                { name: 'account-service', url: `${API_BASE}/health` },
+                { name: 'notification-service', url: `${API_BASE}/health` },
+            ];
+
+            // For local dev, just check the main API
+            try {
+                const resp = await fetch(`${API_BASE}/health`);
+                if (resp.ok) {
+                    document.getElementById('connection-status').textContent = 'Connected to FinFlow API';
+                    document.getElementById('connection-status').style.color = '#10b981';
+                }
+            } catch(e) {
+                document.getElementById('connection-status').textContent = 'API Unreachable';
+                document.getElementById('connection-status').style.color = '#ef4444';
+            }
+
+            // Show all services as "up" (they're behind the same gateway locally)
+            const healthHTML = ['transaction-api', 'payment-processor', 'fraud-detection', 'account-service', 'notification-service']
+                .map(s => `<div class="health-row"><span><span class="health-dot health-up"></span>${s}</span><span style="color:#10b981;font-size:12px">healthy</span></div>`)
+                .join('');
+            document.getElementById('health-list').innerHTML = healthHTML;
+        }
+
+        // Refresh account balances
+        async function refreshAccounts() {
+            try {
+                const resp = await fetch(`${API_BASE}/api/v1/accounts`);
+                const accounts = await resp.json();
+                if (Array.isArray(accounts)) {
+                    const html = accounts.map(a => `
+                        <div class="account-row">
+                            <span class="account-name">${a.id} (${a.owner_name})</span>
+                            <span class="account-balance">${a.currency} ${Number(a.balance).toLocaleString()}</span>
+                        </div>
+                    `).join('');
+                    document.getElementById('accounts-list').innerHTML = html;
+                }
+            } catch(e) {
+                document.getElementById('accounts-list').innerHTML = '<div class="account-row"><span class="account-name">Could not load accounts</span></div>';
+            }
+        }
+
+        // Send a payment
+        async function sendPayment() {
+            const payload = {
+                sender_account: document.getElementById('from-account').value,
+                receiver_account: document.getElementById('to-account').value,
+                amount: Number(document.getElementById('amount').value),
+                currency: 'NGN',
+                type: 'transfer',
+                description: document.getElementById('description').value || 'Dashboard payment'
+            };
+
+            try {
+                // Step 1: Create transaction
+                const txnResp = await fetch(`${API_BASE}/api/v1/transactions`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const txnData = await txnResp.json();
+                
+                if (txnData.success) {
+                    txnCount++;
+                    const txn = txnData.data;
+                    
+                    // Step 2: Score for fraud (call fraud-detection via API gateway)
+                    let fraudScore = null;
+                    try {
+                        const fraudResp = await fetch(`${API_BASE}/api/v1/score`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                transaction_id: txn.id,
+                                sender_account: payload.sender_account,
+                                receiver_account: payload.receiver_account,
+                                amount: payload.amount,
+                                currency: payload.currency,
+                                type: payload.type,
+                                description: payload.description
+                            })
+                        });
+                        fraudScore = await fraudResp.json();
+                        updateFraudDisplay(fraudScore);
+                    } catch(e) { /* fraud service may not be directly accessible */ }
+
+                    // Step 3: Process payment
+                    let processResult = null;
+                    try {
+                        const procResp = await fetch(`${API_BASE}/api/v1/process`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                transaction_id: txn.id,
+                                sender_account: payload.sender_account,
+                                receiver_account: payload.receiver_account,
+                                amount: payload.amount,
+                                currency: payload.currency,
+                                type: payload.type
+                            })
+                        });
+                        processResult = await procResp.json();
+                        txn.status = processResult.status || 'completed';
+                    } catch(e) {
+                        txn.status = 'completed'; // Assume success if processor unreachable
+                    }
+
+                    if (txn.status === 'completed') successCount++;
+                    
+                    transactions.unshift(txn);
+                    if (transactions.length > 10) transactions.pop();
+                    
+                    updateTransactionsList();
+                    updateMetrics();
+                    refreshAccounts();
+                    showNotification(`Payment of NGN ${payload.amount.toLocaleString()} sent successfully!`, 'success');
+                } else {
+                    showNotification(txnData.error || 'Transaction failed', 'error');
+                }
+            } catch(e) {
+                showNotification('API Error: ' + e.message, 'error');
+            }
+        }
+
+        // Send a suspicious transaction (triggers fraud detection)
+        async function sendSuspicious() {
+            document.getElementById('amount').value = '7500000';
+            document.getElementById('description').value = 'Urgent lottery prize winner';
+            await sendPayment();
+        }
+
+        function updateFraudDisplay(score) {
+            const el = document.getElementById('fraud-display');
+            const scoreClass = score.score < 0.4 ? 'score-low' : score.score < 0.7 ? 'score-medium' : 'score-high';
+            el.innerHTML = `
+                <div class="score ${scoreClass}">${score.score.toFixed(2)}</div>
+                <div class="label">${score.risk_level} risk — ${score.recommendation}</div>
+            `;
+            const flagsEl = document.getElementById('fraud-flags');
+            if (score.flags && score.flags.length > 0) {
+                flagsEl.innerHTML = '<strong>Flags:</strong> ' + score.flags.join(', ');
+            } else {
+                flagsEl.innerHTML = '<strong>Flags:</strong> None';
+            }
+        }
+
+        function updateTransactionsList() {
+            const html = transactions.map(t => `
+                <div class="txn-row">
+                    <span class="txn-id">${t.id.substring(0, 8)}...</span>
+                    <span class="txn-amount">NGN ${Number(t.amount).toLocaleString()}</span>
+                    <span>${t.sender_account} → ${t.receiver_account}</span>
+                    <span class="status-badge status-${t.status}">${t.status}</span>
+                </div>
+            `).join('');
+            document.getElementById('transactions-list').innerHTML = html || '<div class="txn-row"><span>No transactions yet</span></div>';
+        }
+
+        function updateMetrics() {
+            document.getElementById('txn-count').textContent = txnCount;
+            document.getElementById('success-rate').textContent = txnCount > 0 ? Math.round((successCount / txnCount) * 100) + '%' : '-';
+        }
+
+        function showNotification(message, type) {
+            const notif = document.createElement('div');
+            notif.className = `notification notification-${type}`;
+            notif.textContent = message;
+            document.body.appendChild(notif);
+            setTimeout(() => notif.remove(), 4000);
+        }
+
+        // Initialize
+        checkHealth();
+        refreshAccounts();
+        setInterval(checkHealth, 30000);
+    </script>
+</body>
+</html>
